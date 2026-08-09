@@ -103,3 +103,4 @@ Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 "# Minto_Sver" 
 "# Minto_Sver" 
 "# Minto_BE_Sver" 
+"# Safio_BE_2026" 

@@ -1,21 +1,26 @@
-// src/auth/auth.module.ts
 import { Module } from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { AuthController } from './auth.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Users } from '../../../entities/users.entity';
-import { Role } from '../../../entities/role.entity';
 import { JwtModule } from '@nestjs/jwt';
+
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+
+// Import Entities
+import { User } from '../../../entities/users.entity';
+import { Role } from '../../../entities/roles.entity';
 
 @Module({
         imports: [
-                TypeOrmModule.forFeature([Users, Role]),
+                TypeOrmModule.forFeature([User, Role]),
+
                 JwtModule.register({
-                        secret: process.env.JWT_SECRET || 'your_jwt_secret',
+                        secret:
+                                process.env.JWT_SECRET ||
+                                'Safio_2025_CareAI_1711_huynhnamyeager_A9sd82!ksQ',
                         signOptions: { expiresIn: '1d' },
                 }),
         ],
-        providers: [AuthService],
         controllers: [AuthController],
+        providers: [AuthService],
 })
 export class AuthModule {}

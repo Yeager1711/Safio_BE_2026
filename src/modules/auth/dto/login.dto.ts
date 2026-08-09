@@ -1,10 +1,11 @@
-import { IsNotEmpty, IsEmail } from 'class-validator';
+// src/auth/dto/login.dto.ts
+import { IsEmail, IsNotEmpty } from 'class-validator';
 
 export class LoginDto {
-        @IsNotEmpty()
-        @IsEmail()
+        @IsEmail({}, { message: 'Email không hợp lệ' })
+        @IsNotEmpty({ message: 'Email không được để trống' })
         email: string;
 
-        @IsNotEmpty()
+        @IsNotEmpty({ message: 'Mật khẩu không được để trống' })
         password: string;
 }

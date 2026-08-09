@@ -7,6 +7,7 @@ import {
         UsePipes,
         ValidationPipe,
 } from '@nestjs/common';
+
 import { AuthUserService } from './login_user.service';
 import { LoginDto } from '../dto/login.dto';
 
@@ -18,21 +19,15 @@ export class AuthUserController {
         @HttpCode(HttpStatus.OK)
         @UsePipes(new ValidationPipe({ transform: true }))
         async login(@Body() loginDto: LoginDto) {
-                const { accessToken, user } = await this.authUserService.validateUser(loginDto);
-                const { password, ...userWithoutPassword } = user;
-                return {
-                        message: 'Đăng nhập thành công',
-                        user: {
-                                ...userWithoutPassword,
-                                full_name: user.full_name,
-                        },
-                        accessToken,
-                };
+                return this.authUserService.login(loginDto.email, loginDto.password);
         }
 
+        // Chưa triển khai Google Login
         @Post('google')
         @HttpCode(HttpStatus.OK)
-        async loginWithGoogle(@Body('id_token') idToken: string) {
-                return this.authUserService.loginWithGoogle(idToken);
+        async loginWithGoogle() {
+                return {
+                        message: 'Google Login chưa được triển khai.',
+                };
         }
 }
