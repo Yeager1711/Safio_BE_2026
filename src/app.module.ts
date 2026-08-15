@@ -228,7 +228,7 @@ import { AuthUserLoginModule } from './modules/auth/login/login_user.module';
 import { FallWarningModule } from './modules/Fall_warning/Fall_warning.module';
 import { UserModule } from './modules/auth/user/user.module';
 import { RelativeModule } from './modules/auth/Relative/relative.module';
-import { CameraModule } from './modules/auth/Camera/camera.module';
+import { CameraModule } from './modules/camera/camera.module';
 import { AI_Module } from './modules/auth/AI_reply/ai.module';
 import { FaceIdModule } from './modules/auth/FaceID/face-id.module';
 
@@ -346,15 +346,6 @@ export class AppModule {
                                 {
                                         path: 'fall-warning/recovery',
                                         method: RequestMethod.POST,
-                                },
-
-                                /**
-                                 * FACE LOGIN
-                                 * Chưa có JWT
-                                 */
-                                {
-                                        path: 'face-id/verify',
-                                        method: RequestMethod.POST,
                                 }
                         )
                         .forRoutes(
@@ -420,11 +411,11 @@ export class AppModule {
                                  * Camera
                                  */
                                 {
-                                        path: 'camera/create',
+                                        path: 'cameras/create',
                                         method: RequestMethod.POST,
                                 },
                                 {
-                                        path: 'camera/accessible-cameras',
+                                        path: 'cameras/get-cameras',
                                         method: RequestMethod.GET,
                                 },
 
@@ -454,7 +445,14 @@ export class AppModule {
                                 {
                                         path: 'face-id/profile',
                                         method: RequestMethod.DELETE,
-                                }
+                                },
+
+                                {
+                                        path: 'face-id/verify',
+                                        method: RequestMethod.POST,
+                                },
+
+                              
                         );
         }
 }

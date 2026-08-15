@@ -25,8 +25,12 @@ export class FaceIdController {
         }
 
         @Post('verify')
-        async verifyFace(@Body() dto: VerifyFaceDto) {
-                return this.faceIdService.verifyFace(dto);
+        async verifyFace(@Req() req: AuthenticatedRequest, @Body() dto: VerifyFaceDto) {
+                if (!req.user?.user_id) {
+                        throw new UnauthorizedException('Chưa đăng nhập');
+                }
+
+                return this.faceIdService.verifyFace(req.user.user_id, dto);
         }
 
         @Get('profile')

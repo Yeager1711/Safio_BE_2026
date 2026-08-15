@@ -34,7 +34,6 @@ export class Camera {
         })
         camera_type: 'IP' | 'Ezviz' | 'Imou';
 
-        // Ezviz
         @Column({ length: 255, nullable: true })
         app_key?: string;
 
@@ -53,7 +52,6 @@ export class Camera {
         @Column({ length: 100, nullable: true })
         verify_code?: string;
 
-        // Imou
         @Column({ length: 255, nullable: true })
         imou_app_id?: string;
 
@@ -66,7 +64,6 @@ export class Camera {
         @Column({ length: 255, nullable: true })
         imou_device_id?: string;
 
-        // RTSP
         @Column({ length: 100, nullable: true })
         rtsp_username?: string;
 
@@ -79,11 +76,16 @@ export class Camera {
         @Column({ nullable: true })
         rtsp_channel?: number;
 
-        @ManyToOne(() => FamilyGroup, { nullable: false })
+        @ManyToOne(() => FamilyGroup, {
+                nullable: true,
+                onDelete: 'SET NULL',
+        })
         @JoinColumn({ name: 'family_group_id' })
-        familyGroup: FamilyGroup;
+        familyGroup: FamilyGroup | null;
 
-        @ManyToOne(() => User, { nullable: false })
+        @ManyToOne(() => User, {
+                nullable: false,
+        })
         @JoinColumn({ name: 'created_by' })
         createdBy: User;
 

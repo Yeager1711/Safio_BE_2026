@@ -165,9 +165,14 @@ export class FaceIdService {
         /**
          * VERIFY FACE
          */
-        async verifyFace(dto: VerifyFaceDto) {
+        async verifyFace(userId: string, dto: VerifyFaceDto) {
                 const startTime = Date.now();
-                this.logger.log('========== VERIFY FACE START ==========');
+
+                this.logger.log(`========== VERIFY FACE START | USER: ${userId} ==========`);
+
+                // =========================================================
+                // 1. Validate input
+                // =========================================================
 
                 if (!dto.images || !Array.isArray(dto.images) || dto.images.length === 0) {
                         throw new BadRequestException('Cần ít nhất 1 ảnh khuôn mặt');
@@ -185,52 +190,113 @@ export class FaceIdService {
                         }
                 }
 
-                // 1. Tạo embedding từ các frame
-                const scanEmbeddings: number[][] = [];
+                // =========================================================
+                // 2. Lấy face profile CỦA USER ĐANG ĐĂNG NHẬP
+                // =========================================================
 
-                for (let i = 0; i < images.length; i++) {
-                        try {
-                                const embedding = await this.faceAIService.createEmbedding(
-                                        images[i]
-                                );
+                const faceProfile = await this.faceProfileRepository.findOne({
+                        where: {
+                                user_id: userId,
+                        },
+                });
 
-                                if (!this.faceAIService.validateEmbedding(embedding)) {
-                                        this.logger.warn(`Frame ${i + 1} embedding không hợp lệ`);
-                                        continue;
-                                }
-
-                                scanEmbeddings.push(embedding);
-
-                                scanEmbeddings.push(embedding);
-
-                                this.logger.log(`
-                                        ==============================
-                                        FRAME ${i + 1}
-
-                                        Embedding length:
-                                        ${embedding.length}
-
-                                        First 10 values:
-                                        ${embedding.slice(0, 10)}
-
-                                        ==============================
-                                `);
-                        } catch (error: any) {
-                                this.logger.error(
-                                        `Frame ${i + 1} error: ${error?.message || error}`
-                                );
-                        }
+                if (!faceProfile) {
+                        return {
+                                success: false,
+                                matched: false,
+                                confidence: 0,
+                                message: 'Người dùng chưa đăng ký khuôn mặt',
+                        };
                 }
+
+                // =========================================================
+                // 3. Lấy embeddings CỦA CHÍNH USER NÀY
+                // =========================================================
+
+                const registeredFaces = await this.faceEmbeddingRepository.find({
+                        where: {
+                                face_profile_id: faceProfile.id,
+                        },
+                });
+
+                if (!registeredFaces || registeredFaces.length === 0) {
+                        return {
+                                success: false,
+                                matched: false,
+                                confidence: 0,
+                                message: 'Người dùng chưa có dữ liệu khuôn mặt',
+                        };
+                }
+
+                this.logger.log(`Registered embeddings: ${registeredFaces.length}`);
+
+                // =========================================================
+                // 4. Tạo embedding cho 3 frame
+                // =========================================================
+
+                // =========================================================
+                // 4. Tạo embedding cho 3 frame - PARALLEL
+                // =========================================================
+
+                const embeddingStart = Date.now();
+
+                const results = await Promise.allSettled(
+                        images.map(async (image, index) => {
+                                const frameStart = Date.now();
+
+                                this.logger.log(`[PERF] Frame ${index + 1} START`);
+
+                                try {
+                                        const embedding =
+                                                await this.faceAIService.createEmbedding(image);
+
+                                        const frameTime = Date.now() - frameStart;
+
+                                        this.logger.log(
+                                                `[PERF] Frame ${index + 1} DONE: ${frameTime}ms`
+                                        );
+
+                                        return embedding;
+                                } catch (error: any) {
+                                        const frameTime = Date.now() - frameStart;
+
+                                        this.logger.error(
+                                                `[PERF] Frame ${index + 1} FAILED: ${frameTime}ms | ${
+                                                        error?.message || error
+                                                }`
+                                        );
+
+                                        throw error;
+                                }
+                        })
+                );
+
+                const embeddingTime = Date.now() - embeddingStart;
+
+                this.logger.log(`[PERF] ALL 3 EMBEDDINGS: ${embeddingTime}ms`);
+
+                const scanEmbeddings = results
+                        .filter(
+                                (r): r is PromiseFulfilledResult<number[]> =>
+                                        r.status === 'fulfilled'
+                        )
+                        .map((r) => r.value);
+
+                this.logger.log(`[PERF] Embedding: ${Date.now() - embeddingStart}ms`);
 
                 if (scanEmbeddings.length === 0) {
                         return {
                                 success: false,
                                 matched: false,
+                                confidence: 0,
                                 message: 'Không xử lý được khuôn mặt từ các frame',
                         };
                 }
 
-                // 2. Kiểm tra consistency giữa các frame
+                // =========================================================
+                // 5. Kiểm tra consistency giữa 3 frame
+                // =========================================================
+
                 if (scanEmbeddings.length >= 2) {
                         const similarities: number[] = [];
 
@@ -248,164 +314,144 @@ export class FaceIdService {
                         const avgSelfSimilarity =
                                 similarities.reduce((a, b) => a + b, 0) / similarities.length;
 
-                        this.logger.log(
-                                `Self-similarity (frames): ${avgSelfSimilarity.toFixed(4)}`
-                        );
+                        this.logger.log(`Self-similarity: ${avgSelfSimilarity.toFixed(4)}`);
 
                         if (avgSelfSimilarity < 0.8) {
                                 return {
                                         success: false,
                                         matched: false,
-                                        message: 'Khuôn mặt không ổn định (có thể là ảnh tĩnh hoặc chuyển động mạnh)',
+                                        confidence: avgSelfSimilarity,
+                                        message: 'Khuôn mặt không ổn định',
                                 };
                         }
                 }
 
-                // 3. Lấy toàn bộ embedding đã đăng ký
-                const faceEmbeddings = await this.faceEmbeddingRepository.find({
-                        relations: {
-                                faceProfile: {
-                                        user: true,
-                                },
-                        },
-                });
+                // =========================================================
+                // 6. So sánh CHỈ với khuôn mặt của user hiện tại
+                // =========================================================
 
-                if (faceEmbeddings.length === 0) {
-                        return {
-                                success: false,
-                                matched: false,
-                                message: 'Chưa có dữ liệu khuôn mặt nào trong hệ thống',
-                        };
-                }
+                const matchingStart = Date.now();
 
-                // 4. So sánh
-                const userScores = new Map<string, { scores: number[]; faces: FaceEmbedding[] }>();
+                const frameScores: number[] = [];
 
                 for (const scanEmbedding of scanEmbeddings) {
-                        for (const face of faceEmbeddings) {
-                                if (!face.embedding || !Array.isArray(face.embedding)) continue;
+                        const scoresForFrame: number[] = [];
+
+                        for (const face of registeredFaces) {
+                                if (!face.embedding || !Array.isArray(face.embedding)) {
+                                        continue;
+                                }
 
                                 const score = this.faceAIService.cosineSimilarity(
                                         scanEmbedding,
                                         face.embedding
                                 );
 
-                                this.logger.log(`
-                                        ANGLE: ${face.angle}
-                                        SCORE: ${score}
+                                scoresForFrame.push(score);
 
-                                        SCAN:
-                                        ${scanEmbedding.slice(0, 5)}
-
-                                        REGISTER:
-                                        ${face.embedding.slice(0, 5)}
-                                `);
-
-                                const userId = face.faceProfile?.user?.id;
-                                if (!userId) continue;
-
-                                if (!userScores.has(userId)) {
-                                        userScores.set(userId, { scores: [], faces: [] });
-                                }
-
-                                userScores.get(userId)!.scores.push(score);
-                                userScores.get(userId)!.faces.push(face);
+                                this.logger.debug(
+                                        `ANGLE: ${face.angle} | SCORE: ${score.toFixed(4)}`
+                                );
                         }
+
+                        if (scoresForFrame.length === 0) {
+                                continue;
+                        }
+
+                        // Frame được xem là match với embedding
+                        // tốt nhất của chính user này.
+                        const bestFrameScore = Math.max(...scoresForFrame);
+
+                        frameScores.push(bestFrameScore);
                 }
 
-                let bestUserId: string | null = null;
-                let bestAverage = 0;
+                this.logger.log(`[PERF] Matching: ${Date.now() - matchingStart}ms`);
 
-                for (const [userId, data] of userScores) {
-                        const scores = data.scores;
-
-                        if (scores.length === 0) continue;
-
-                        // Điểm trung bình tất cả embedding của user
-                        const average = scores.reduce((a, b) => a + b, 0) / scores.length;
-
-                        // Bao nhiêu embedding đạt threshold
-                        const passedCount = scores.filter((s) => s >= this.FACE_THRESHOLD).length;
-
-                        const user = data.faces[0]?.faceProfile?.user;
-
-                        this.logger.log(`
-                        ===============================
-                        USER: ${user?.full_name}
-                        ID: ${userId}
-
-                        AVG:
-                        ${average.toFixed(4)}
-
-                        PASS:
-                        ${passedCount}/${scores.length}
-                        ===============================
-                        `);
-
-                        /**
-                         * Không dùng maxScore nữa
-                         * Phải tất cả frame đều đạt
-                         */
-                        const accepted = average >= 0.75 && passedCount === scores.length;
-
-                        if (accepted && average > bestAverage) {
-                                bestAverage = average;
-                                bestUserId = userId;
-                        }
+                if (frameScores.length === 0) {
+                        return {
+                                success: false,
+                                matched: false,
+                                confidence: 0,
+                                message: 'Không thể so sánh khuôn mặt',
+                        };
                 }
 
-                if (!bestUserId) {
+                // =========================================================
+                // 7. Tính confidence
+                // =========================================================
+
+                const average = frameScores.reduce((a, b) => a + b, 0) / frameScores.length;
+
+                const passedFrames = frameScores.filter(
+                        (score) => score >= this.FACE_THRESHOLD
+                ).length;
+
+                this.logger.log(`
+        ===============================
+        FACE VERIFICATION
+        USER ID: ${userId}
+
+        FRAME SCORES:
+        ${frameScores.map((s) => s.toFixed(4)).join(', ')}
+
+        AVG:
+        ${average.toFixed(4)}
+
+        PASS:
+        ${passedFrames}/${frameScores.length}
+
+        ===============================
+    `);
+
+                // =========================================================
+                // 8. Quyết định xác thực
+                // =========================================================
+
+                const accepted = average >= 0.75 && passedFrames === frameScores.length;
+
+                if (!accepted) {
                         this.logger.warn(
-                                `FACE VERIFY FAILED | MAX: ${bestAverage.toFixed(4)} | TIME: ${Date.now() - startTime}ms`
+                                `FACE VERIFY FAILED | USER: ${userId} | AVG: ${average.toFixed(4)} | TIME: ${
+                                        Date.now() - startTime
+                                }ms`
                         );
 
                         return {
                                 success: false,
                                 matched: false,
-                                confidence: bestAverage,
-                                message: 'Khuôn mặt không trùng khớp',
+                                confidence: average,
+                                message: 'Khuôn mặt không khớp với tài khoản đang đăng nhập',
                         };
                 }
 
-                // 5. Lấy user + JWT
-                const user = await this.userRepository.findOne({
-                        where: { id: bestUserId },
-                        relations: ['role'],
-                });
-
-                if (!user) {
-                        return {
-                                success: false,
-                                matched: false,
-                                message: 'Không tìm thấy người dùng',
-                        };
-                }
-
-                const token = this.jwtService.sign({
-                        user_id: user.id,
-                        email: user.email,
-                });
+                // =========================================================
+                // 9. Xác thực thành công
+                // =========================================================
 
                 this.logger.log(`
-                        AUTHENTICATION SUCCESS
+                        ===============================
+                        FACE VERIFICATION SUCCESS
+
+                        USER ID:
+                        ${userId}
 
                         AVG:
-                        ${bestAverage.toFixed(4)}
+                        ${average.toFixed(4)}
+
+                        PASS:
+                        ${passedFrames}/${frameScores.length}
 
                         TIME:
                         ${Date.now() - startTime}ms
+
+                        ===============================
                 `);
 
                 return {
                         success: true,
                         matched: true,
-                        confidence: bestAverage,
-                        token,
-                        user: {
-                                id: user.id,
-                                name: user.full_name,
-                                email: user.email,
-                        },
+                        confidence: average,
+                        message: 'Xác thực khuôn mặt thành công',
                 };
         }
 
