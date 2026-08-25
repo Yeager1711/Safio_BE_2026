@@ -190,15 +190,24 @@ export class UserService implements OnModuleInit {
         async getUserProfile(userId: string) {
                 const user = await this.userRepository.findOne({
                         where: { id: userId },
+
                         relations: ['role'],
+
                         select: {
                                 id: true,
                                 full_name: true,
                                 email: true,
                                 phone_number: true,
                                 date_of_birth: true,
+
                                 createdAt: true,
-                                role: { name: true },
+                                updatedAt: true,
+
+                                require_face_id: true,
+
+                                role: {
+                                        name: true,
+                                },
                         },
                 });
 
@@ -315,14 +324,22 @@ export class UserService implements OnModuleInit {
                                 email: user.email,
                                 phone_number: user.phone_number,
                                 role: user.role?.name ?? 'customer',
+
                                 age: this.calculateAge(user.date_of_birth),
                                 date_of_birth: this.formatDate(user.date_of_birth),
+
                                 created_at: user.createdAt,
+                                updated_at: user.updatedAt,
                         },
+
+                        verify_Auth: {
+                                require_face_id: user.require_face_id,
+                        },
+
                         relatives,
                         cameras,
-                        activity_logs: logs,
-                        notifications,
+                        // activity_logs: logs,
+                        // notifications,
                 };
         }
 

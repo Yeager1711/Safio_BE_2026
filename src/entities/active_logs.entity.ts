@@ -36,7 +36,10 @@ export class ActiveLog {
         @Column({ length: 100, nullable: true })
         behavior?: string;
 
-        @Column({ nullable: true })
+        @Column({
+                type: 'longtext',
+                nullable: true,
+        })
         snapshot_url?: string;
 
         @Column({ nullable: true })

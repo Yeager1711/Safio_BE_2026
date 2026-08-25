@@ -24,7 +24,7 @@ export class Camera {
         @Column({ length: 100, nullable: true })
         ip_address?: string;
 
-        @Column({ type: 'enum', enum: ['active', 'inactive'], default: 'inactive' })
+        @Column({ type: 'enum', enum: ['active', 'inactive'], default: 'active' })
         status: string;
 
         @Column({

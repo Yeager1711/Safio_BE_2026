@@ -3,7 +3,7 @@ import { Body, Controller, Delete, Get, Post, Req, UnauthorizedException } from 
 import { FaceIdService } from './face-id.service';
 
 import { RegisterFaceDto } from '../dto/register-face.dto';
-import { VerifyFaceDto } from '../dto/verify-face.dto';
+import { VerifyFaceDto } from './dto/verify-face.dto';
 
 interface AuthenticatedRequest extends Request {
         user?: {

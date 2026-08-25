@@ -140,11 +140,9 @@ export class CameraService {
                                 id: userId,
                         },
                 });
-
                 if (!user) {
                         throw new NotFoundException('Không tìm thấy người dùng');
                 }
-
                 const familyMembers = await this.familyMemberRepository.find({
                         where: {
                                 user: {
@@ -155,25 +153,24 @@ export class CameraService {
                                 familyGroup: true,
                         },
                 });
-
                 const familyGroupIds = familyMembers
                         .filter((member) => member.familyGroup)
                         .map((member) => member.familyGroup.id);
-
                 const query = this.cameraRepository
                         .createQueryBuilder('camera')
                         .leftJoinAndSelect('camera.familyGroup', 'familyGroup')
                         .leftJoinAndSelect('camera.createdBy', 'createdBy')
                         .where('createdBy.id = :userId', { userId });
-
                 if (familyGroupIds.length > 0) {
                         query.orWhere('familyGroup.id IN (:...familyGroupIds)', {
                                 familyGroupIds,
                         });
                 }
-
                 const cameras = await query.orderBy('camera.createdAt', 'DESC').getMany();
-
+                const activeCount = cameras.filter((camera) => camera.status === 'active').length;
+                const inactiveCount = cameras.filter(
+                        (camera) => camera.status === 'inactive'
+                ).length;
                 return {
                         success: true,
                         message: 'Lấy danh sách camera thành công',
@@ -187,8 +184,6 @@ export class CameraService {
                                         created_at: camera.createdAt,
                                         updated_at: camera.updatedAt,
                                 };
-
-                                // Chỉ thêm field khi có giá trị
                                 if (camera.ip_address) item.ip_address = camera.ip_address;
                                 if (camera.app_key) item.app_key = camera.app_key;
                                 if (camera.app_secret) item.app_secret = camera.app_secret;
@@ -212,16 +207,16 @@ export class CameraService {
                                 if (camera.createdBy?.id) item.created_by = camera.createdBy.id;
                                 if (camera.createdBy?.full_name)
                                         item.created_by_name = camera.createdBy.full_name;
-
                                 return item;
                         }),
                         meta: {
                                 total: cameras.length,
+                                active: activeCount,
+                                inactive: inactiveCount,
                                 family_group_ids: familyGroupIds,
                         },
                 };
         }
-
         private normalizeCameraDto(dto: CreateCameraDto) {
                 const raw = dto as any;
 

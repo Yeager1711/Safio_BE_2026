@@ -65,4 +65,5 @@ export class User {
                 name: 'updated_at',
         })
         updatedAt: Date;
+        family_group_id: any;
 }

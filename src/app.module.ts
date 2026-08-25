@@ -225,12 +225,12 @@ import { AuthMiddleware } from './middlewares/auth/auth.middleware';
 // Các module nghiệp vụ
 import { AuthModule } from './modules/auth/register/auth.module';
 import { AuthUserLoginModule } from './modules/auth/login/login_user.module';
-import { FallWarningModule } from './modules/Fall_warning/Fall_warning.module';
 import { UserModule } from './modules/auth/user/user.module';
 import { RelativeModule } from './modules/auth/Relative/relative.module';
 import { CameraModule } from './modules/camera/camera.module';
 import { AI_Module } from './modules/auth/AI_reply/ai.module';
 import { FaceIdModule } from './modules/auth/FaceID/face-id.module';
+import { FallDetectionModule } from './modules/Fall-detection/fall-detection.module';
 
 // Import Entities
 import { User } from './entities/users.entity';
@@ -303,12 +303,12 @@ import { FaceRecognitionLog } from './entities/face_recognition_log.entity';
                 // Các Module nghiệp vụ
                 AuthModule,
                 AuthUserLoginModule,
-                FallWarningModule,
                 UserModule,
                 RelativeModule,
                 CameraModule,
                 AI_Module,
                 FaceIdModule,
+                FallDetectionModule,
         ],
 })
 export class AppModule {
@@ -324,27 +324,6 @@ export class AppModule {
                                 },
                                 {
                                         path: 'auth/register',
-                                        method: RequestMethod.POST,
-                                },
-
-                                /**
-                                 * Fall warning
-                                 * Camera AI gửi event → không cần user token
-                                 */
-                                {
-                                        path: 'fall-warning/alert1',
-                                        method: RequestMethod.POST,
-                                },
-                                {
-                                        path: 'fall-warning/alert2',
-                                        method: RequestMethod.POST,
-                                },
-                                {
-                                        path: 'fall-warning/alert3',
-                                        method: RequestMethod.POST,
-                                },
-                                {
-                                        path: 'fall-warning/recovery',
                                         method: RequestMethod.POST,
                                 }
                         )
@@ -452,7 +431,16 @@ export class AppModule {
                                         method: RequestMethod.POST,
                                 },
 
-                              
+                                // Fall Detection
+
+                                {
+                                        path: 'fall-detection/create',
+                                        method: RequestMethod.POST,
+                                },
+                                {
+                                        path: 'fall-detection/timeline',
+                                        method: RequestMethod.GET,
+                                }
                         );
         }
 }
