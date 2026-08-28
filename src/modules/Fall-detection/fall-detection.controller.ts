@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Post, Query, Req, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UnauthorizedException } from '@nestjs/common';
 
 import { Request } from 'express';
 
 import { FallDetectionService } from './fall-detection.service';
 import { CreateFallDetectionDto } from './dto/create-fall-detection.dto';
 import { GetFallTimelineDto } from './dto/get-fall-timeline.dto';
+import { UpdateFallWarningDto } from './dto/update-fall-warning.dto';
 
 interface AuthenticatedRequest extends Request {
         user?: {
@@ -38,5 +39,20 @@ export class FallDetectionController {
                 }
 
                 return this.fallDetectionService.getTimeline(user.user_id, query);
+        }
+
+        @Patch(':id/warning')
+        async updateWarning(
+                @Req() req: AuthenticatedRequest,
+                @Param('id') id: string,
+                @Body() dto: UpdateFallWarningDto
+        ) {
+                const user = req.user;
+
+                if (!user?.user_id) {
+                        throw new UnauthorizedException('Bạn chưa đăng nhập');
+                }
+
+                return this.fallDetectionService.updateWarning(user.user_id, id, dto);
         }
 }

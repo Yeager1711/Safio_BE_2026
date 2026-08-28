@@ -12,6 +12,7 @@ import { Notification } from '../../entities/notifications.entity';
 
 import { CreateFallDetectionDto } from './dto/create-fall-detection.dto';
 import { GetFallTimelineDto } from './dto/get-fall-timeline.dto';
+import { UpdateFallWarningDto } from './dto/update-fall-warning.dto';
 
 @Injectable()
 export class FallDetectionService {
@@ -65,7 +66,7 @@ export class FallDetectionService {
                         return;
                 }
 
-                const level = String(options.level).toLowerCase();
+                const level = String(options.level).toLowerCase().trim();
 
                 let subject = '';
                 let title = '';
@@ -77,31 +78,31 @@ export class FallDetectionService {
                 if (level === '1' || level === 'low' || level === 'nhẹ') {
                         subject = `[MỨC 1] Phát hiện té ngã - ${options.camName}`;
                         title = 'CẢNH BÁO TÉ NGÃ - MỨC 1';
-
                         borderColor = '#ff9800';
                         backgroundColor = '#fff8e1';
                         textColor = '#e65100';
-
                         message =
                                 'Hệ thống vừa phát hiện một sự kiện té ngã. Vui lòng kiểm tra người được giám sát.';
-                } else if (level === '2' || level === 'medium' || level === 'trung bình') {
+                } else if (
+                        level === '2' ||
+                        level === 'medium' ||
+                        level === 'trung bình' ||
+                        level === 'trung binh'
+                ) {
                         subject = `[MỨC 2] Chưa phục hồi - ${options.camName}`;
                         title = 'CẢNH BÁO TÉ NGÃ - MỨC 2';
-
                         borderColor = '#e53935';
                         backgroundColor = '#ffebee';
                         textColor = '#c62828';
-
                         message =
                                 'Người được giám sát chưa được phát hiện đứng dậy sau khi té. Cần kiểm tra ngay.';
                 } else {
+                        // Nghiêm trọng / High / Critical / 3
                         subject = `[MỨC 3 - KHẨN CẤP] Té ngã - ${options.camName}`;
                         title = 'KHẨN CẤP - TÉ NGÃ MỨC 3';
-
                         borderColor = '#b71c1c';
                         backgroundColor = '#ffebee';
                         textColor = '#b71c1c';
-
                         message =
                                 'Người được giám sát chưa phục hồi trong thời gian dài. Có khả năng đang gặp nguy hiểm và cần được hỗ trợ khẩn cấp.';
                 }
@@ -637,11 +638,6 @@ export class FallDetectionService {
 
                         updatedAt: fall.updatedAt,
                 }));
-
-                // =========================================================
-                // 7. RESPONSE
-                // =========================================================
-
                 return {
                         success: true,
 
@@ -655,6 +651,173 @@ export class FallDetectionService {
                                 total,
 
                                 totalPages: Math.ceil(total / limit),
+                        },
+                };
+        }
+
+        // UPDATE FALL WARNING LEVEL (escalation)
+        async updateWarning(userId: string, fallDetectionId: string, dto: UpdateFallWarningDto) {
+                const activeLog = await this.activeLogRepository.findOne({
+                        where: { id: fallDetectionId },
+                        relations: [
+                                'camera',
+                                'camera.createdBy',
+                                'camera.familyGroup',
+                                'user',
+                                'warningType',
+                        ],
+                });
+
+                if (!activeLog) {
+                        throw new NotFoundException(
+                                `Không tìm thấy fall detection: ${fallDetectionId}`
+                        );
+                }
+
+                if (activeLog.camera?.createdBy?.id !== userId && activeLog.user?.id !== userId) {
+                        throw new BadRequestException('Bạn không có quyền cập nhật cảnh báo này');
+                }
+
+                const newWarningType = await this.warningTypeRepository.findOne({
+                        where: { id: dto.warningTypeId },
+                });
+
+                if (!newWarningType) {
+                        throw new NotFoundException(
+                                `Không tìm thấy warning type: ${dto.warningTypeId}`
+                        );
+                }
+
+                const getLevelOrder = (level?: string | null): number => {
+                        if (!level) return 0;
+                        const key = level.toLowerCase().trim();
+                        const map: Record<string, number> = {
+                                '1': 1,
+                                low: 1,
+                                nhẹ: 1,
+                                '2': 2,
+                                medium: 2,
+                                'trung bình': 2,
+                                'trung binh': 2,
+                                '3': 3,
+                                high: 3,
+                                critical: 3,
+                                'nghiêm trọng': 3,
+                                'nghiem trong': 3,
+                        };
+                        return map[key] ?? 0;
+                };
+
+                const currentLevel = getLevelOrder(activeLog.warningType?.level);
+                const newLevel = getLevelOrder(newWarningType.level);
+
+                if (newLevel <= currentLevel) {
+                        this.logger.warn(
+                                `Bỏ qua escalation: level hiện tại "${activeLog.warningType?.level}" (${currentLevel}), level mới "${newWarningType.level}" (${newLevel})`
+                        );
+                        return {
+                                success: true,
+                                message: 'Warning level không thay đổi (đã ở mức cao hơn hoặc bằng)',
+                                data: {
+                                        id: activeLog.id,
+                                        warningType: activeLog.warningType
+                                                ? {
+                                                          id: activeLog.warningType.id,
+                                                          level: activeLog.warningType.level,
+                                                          description:
+                                                                  activeLog.warningType.description,
+                                                  }
+                                                : null,
+                                },
+                        };
+                }
+
+                activeLog.warningType = newWarningType;
+                const savedLog = await this.activeLogRepository.save(activeLog);
+
+                const familyMembers: FamilyMember[] = [];
+                const familyGroupId = activeLog.camera?.familyGroup?.id;
+
+                if (familyGroupId) {
+                        const members = await this.familyMemberRepository.find({
+                                where: {
+                                        familyGroup: { id: familyGroupId },
+                                },
+                                relations: ['user'],
+                        });
+                        familyMembers.push(...members);
+                } else {
+                        this.logger.warn(`Camera ${activeLog.camera?.id} chưa có family group`);
+                }
+
+                const recipients = familyMembers
+                        .map((m) => m.user)
+                        .filter((u): u is User => !!u)
+                        .map((u) => u.email)
+                        .filter((email): email is string => !!email);
+
+                const uniqueRecipients = [...new Set(recipients)];
+
+                let emailSent = false;
+
+                if (uniqueRecipients.length > 0) {
+                        try {
+                                await this.sendFallEmail({
+                                        recipients: uniqueRecipients,
+                                        level: newWarningType.level,
+                                        description: newWarningType.description,
+                                        camName: activeLog.camera?.cam_name ?? 'Unknown',
+                                        camId: activeLog.camera?.id ?? '',
+                                        timestamp: new Date().toLocaleString('vi-VN', {
+                                                timeZone: 'Asia/Ho_Chi_Minh',
+                                        }),
+                                        snapshot: activeLog.snapshot_url ?? undefined,
+                                        fallType: activeLog.fall_type ?? undefined,
+                                        behavior: activeLog.behavior ?? undefined,
+                                });
+                                emailSent = true;
+                        } catch (error) {
+                                this.logger.error(
+                                        'Gửi email escalation thất bại',
+                                        error instanceof Error ? error.stack : String(error)
+                                );
+                        }
+                }
+
+                for (const member of familyMembers) {
+                        if (!member.user) continue;
+
+                        const notification = this.notificationRepository.create({
+                                activeLog: savedLog,
+                                recipientUser: member.user,
+                                status: emailSent ? 'sent' : 'failed',
+                                sent_at: new Date(),
+                        });
+
+                        await this.notificationRepository.save(notification);
+                }
+
+                return {
+                        success: true,
+                        message: `Đã cập nhật cảnh báo lên MỨC ${newWarningType.level}`,
+                        data: {
+                                id: savedLog.id,
+                                cameraId: activeLog.camera?.id,
+                                cameraName: activeLog.camera?.cam_name,
+                                personId: savedLog.person_id,
+                                action: savedLog.action,
+                                fallType: savedLog.fall_type,
+                                behavior: savedLog.behavior,
+                                snapshotUrl: savedLog.snapshot_url,
+                                warningType: {
+                                        id: newWarningType.id,
+                                        level: newWarningType.level,
+                                        description: newWarningType.description,
+                                },
+                                previousLevel: currentLevel,
+                                emailSent,
+                                notificationCount: familyMembers.filter((m) => !!m.user).length,
+                                updatedAt: savedLog.updatedAt,
                         },
                 };
         }

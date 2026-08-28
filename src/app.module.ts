@@ -440,6 +440,10 @@ export class AppModule {
                                 {
                                         path: 'fall-detection/timeline',
                                         method: RequestMethod.GET,
+                                },
+                                {
+                                        path: 'fall-detection/:id/warning',
+                                        method: RequestMethod.PATCH,
                                 }
                         );
         }

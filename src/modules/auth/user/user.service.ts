@@ -301,20 +301,22 @@ export class UserService implements OnModuleInit {
                         order: { createdAt: 'DESC' },
                 });
 
-                // Activity Logs
-                const logs = await this.activeLogRepository.find({
-                        where: { user: { id: userId } },
-                        relations: ['camera', 'warningType'],
-                        order: { created: 'DESC' },
+                const activityLogCount = await this.activeLogRepository.count({
+                        where: {
+                                user: {
+                                        id: userId,
+                                },
+                        },
                 });
 
-                // Notifications
-                const notifications = await this.notificationRepository.find({
+                const notificationCount = await this.notificationRepository.count({
                         where: {
-                                /* cần điều chỉnh nếu có user_id */
+                                activeLog: {
+                                        user: {
+                                                id: userId,
+                                        },
+                                },
                         },
-                        relations: ['activeLog'],
-                        order: { sent_at: 'DESC' },
                 });
 
                 return {
@@ -338,8 +340,10 @@ export class UserService implements OnModuleInit {
 
                         relatives,
                         cameras,
-                        // activity_logs: logs,
-                        // notifications,
+                        statistics: {
+                                activity_logs: activityLogCount,
+                                notifications: notificationCount,
+                        },
                 };
         }
 
