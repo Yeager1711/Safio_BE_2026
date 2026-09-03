@@ -1,13 +1,14 @@
-import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-
-import * as faceapi from '@vladmandic/face-api';
+import { Injectable, Logger, OnModuleInit, BadRequestException } from '@nestjs/common';
 import * as tf from '@tensorflow/tfjs';
+import * as wasm from '@tensorflow/tfjs-backend-wasm';
+import * as faceapi from '@vladmandic/face-api/dist/face-api.node-wasm.js'; // ← quan trọng
 import * as canvas from 'canvas';
 import * as path from 'path';
 import * as fs from 'fs';
 
 const { Canvas, Image, ImageData } = canvas;
 
+// Monkey patch canvas cho face-api
 faceapi.env.monkeyPatch({
         Canvas,
         Image,
@@ -22,9 +23,7 @@ export class FaceAIService implements OnModuleInit {
 
         private readonly EMBEDDING_SIZE = 128;
 
-        // ================================================================
         // DETECTOR CONFIG
-        // ================================================================
 
         /**
          * Ảnh camera thường là 1280x720.
@@ -77,38 +76,33 @@ export class FaceAIService implements OnModuleInit {
          */
         private readonly MAX_CENTER_OFFSET_RATIO = 0.35;
 
-        // ================================================================
-        // INIT
-        // ================================================================
-
         async onModuleInit() {
                 try {
-                        await tf.setBackend('cpu');
+                        // Chỉ định đường dẫn file .wasm (có thể dùng CDN hoặc local)
+                        // Cách 1: dùng CDN (đơn giản nhất)
+                        wasm.setWasmPaths(
+                                'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm/dist/'
+                        );
+                        await tf.setBackend('wasm');
                         await tf.ready();
-
                         this.logger.log(`TensorFlow backend: ${tf.getBackend()}`);
-
                         await this.loadModels();
+                        this.modelsLoaded = true;
                 } catch (error: any) {
                         this.modelsLoaded = false;
-
                         this.logger.error(
                                 `FaceAI initialization failed: ${error?.message || error}`
                         );
                 }
         }
 
-        // ================================================================
         // LOAD MODELS
-        // ================================================================
-
         private async loadModels() {
                 try {
                         const modelPath = path.join(process.cwd(), 'models');
 
                         if (!fs.existsSync(modelPath)) {
                                 this.logger.error(`Không tìm thấy thư mục models: ${modelPath}`);
-
                                 return;
                         }
 
@@ -116,11 +110,8 @@ export class FaceAIService implements OnModuleInit {
 
                         await Promise.all([
                                 faceapi.nets.ssdMobilenetv1.loadFromDisk(modelPath),
-
                                 faceapi.nets.faceLandmark68Net.loadFromDisk(modelPath),
-
                                 faceapi.nets.faceRecognitionNet.loadFromDisk(modelPath),
-
                                 faceapi.nets.tinyFaceDetector.loadFromDisk(modelPath),
                         ]);
 
@@ -136,10 +127,7 @@ export class FaceAIService implements OnModuleInit {
                 }
         }
 
-        // ================================================================
         // CREATE EMBEDDING
-        // ================================================================
-
         async createEmbedding(imageBase64: string): Promise<number[]> {
                 if (!this.modelsLoaded) {
                         throw new Error('FaceAI models chưa được load');
@@ -148,10 +136,7 @@ export class FaceAIService implements OnModuleInit {
                 const startTime = Date.now();
 
                 try {
-                        // =================================================
                         // 1. VALIDATE BASE64
-                        // =================================================
-
                         if (!imageBase64 || !imageBase64.startsWith('data:image/')) {
                                 throw new BadRequestException(
                                         'Base64 không hợp lệ hoặc thiếu prefix data:image/'
@@ -159,27 +144,19 @@ export class FaceAIService implements OnModuleInit {
                         }
 
                         this.logger.debug(`Input base64 length: ${imageBase64.length}`);
-
                         const base64Data = imageBase64.replace(/^data:image\/[^;]+;base64,/, '');
 
                         if (!base64Data) {
                                 throw new BadRequestException('Không có dữ liệu hình ảnh.');
                         }
-
                         const buffer = Buffer.from(base64Data, 'base64');
-
                         if (!buffer.length) {
                                 throw new BadRequestException('Không thể decode ảnh Base64.');
                         }
-
                         this.logger.debug(`Buffer size: ${buffer.length} bytes`);
 
-                        // =================================================
                         // 2. LOAD IMAGE
-                        // =================================================
-
                         const img = await canvas.loadImage(buffer);
-
                         const originalWidth = img.width;
                         const originalHeight = img.height;
 
@@ -194,16 +171,10 @@ export class FaceAIService implements OnModuleInit {
 
                         this.logger.debug(`Image loaded → ${originalWidth}x${originalHeight}`);
 
-                        // =================================================
                         // 3. GIỮ NGUYÊN ASPECT RATIO
-                        // =================================================
-
                         const processingWidth = this.PROCESSING_WIDTH;
-
                         const processingHeight = this.PROCESSING_HEIGHT;
-
                         const inputCanvas = canvas.createCanvas(processingWidth, processingHeight);
-
                         const ctx = inputCanvas.getContext('2d');
 
                         /**
@@ -216,52 +187,37 @@ export class FaceAIService implements OnModuleInit {
                          * Không distortion.
                          */
                         ctx.drawImage(img, 0, 0, processingWidth, processingHeight);
-
                         const input = inputCanvas as any;
-
                         this.logger.debug(
                                 `Processed image → ${processingWidth}x${processingHeight}`
                         );
 
-                        // =================================================
                         // 4. TINY FACE DETECTOR
-                        // =================================================
-
                         const tinyOptions = new faceapi.TinyFaceDetectorOptions({
                                 inputSize: this.DETECTOR_INPUT_SIZE,
-
                                 scoreThreshold: this.TINY_SCORE_THRESHOLD,
                         });
 
                         let detections = await faceapi.detectAllFaces(input, tinyOptions);
-
                         this.logger.debug(`TinyFaceDetector → ${detections.length} face(s)`);
 
-                        // =================================================
                         // 5. MULTIPLE FACE CHECK
-                        // =================================================
-
                         if (detections.length > 1) {
                                 throw new BadRequestException(
                                         'Phát hiện nhiều khuôn mặt. Vui lòng chỉ có một người trong camera.'
                                 );
                         }
 
-                        // =================================================
                         // 6. SSD FALLBACK
-                        // =================================================
-
                         if (detections.length === 0) {
                                 this.logger.warn('TinyFaceDetector không phát hiện mặt → thử SSD');
 
                                 const ssdOptions = new faceapi.SsdMobilenetv1Options({
                                         minConfidence: this.SSD_MIN_CONFIDENCE,
-
                                         maxResults: 2,
                                 });
 
                                 detections = await faceapi.detectAllFaces(input, ssdOptions);
-
                                 this.logger.debug(`SSD → ${detections.length} face(s)`);
 
                                 if (detections.length > 1) {
@@ -271,30 +227,19 @@ export class FaceAIService implements OnModuleInit {
                                 }
                         }
 
-                        // =================================================
                         // 7. NO FACE
-                        // =================================================
-
                         if (detections.length === 0) {
                                 throw new BadRequestException(
                                         'Không phát hiện được khuôn mặt. Vui lòng nhìn rõ vào camera.'
                                 );
                         }
 
-                        // =================================================
                         // 8. BEST DETECTION
-                        // =================================================
-
                         const detection = detections[0];
-
                         const detectionScore = detection.score;
-
                         this.logger.debug(`Face detection score: ${detectionScore.toFixed(4)}`);
 
-                        // =================================================
                         // 9. SCORE CHECK
-                        // =================================================
-
                         if (
                                 !Number.isFinite(detectionScore) ||
                                 detectionScore < this.TINY_SCORE_THRESHOLD
@@ -306,17 +251,11 @@ export class FaceAIService implements OnModuleInit {
                                 );
                         }
 
-                        // =================================================
                         // 10. FACE BOX
-                        // =================================================
-
                         const box = detection.box;
-
                         const faceWidth = box.width;
                         const faceHeight = box.height;
-
                         const faceCenterX = box.x + box.width / 2;
-
                         const faceCenterY = box.y + box.height / 2;
 
                         this.logger.debug(
@@ -329,19 +268,14 @@ export class FaceAIService implements OnModuleInit {
                                 ].join(', ')
                         );
 
-                        // =================================================
                         // 11. FACE SIZE CHECK
-                        // =================================================
-
                         if (faceWidth < this.MIN_FACE_WIDTH || faceHeight < this.MIN_FACE_HEIGHT) {
                                 throw new BadRequestException(
                                         'Khuôn mặt quá nhỏ. Vui lòng đưa mặt lại gần camera.'
                                 );
                         }
 
-
                         const faceWidthRatio = faceWidth / processingWidth;
-
                         const faceHeightRatio = faceHeight / processingHeight;
 
                         this.logger.debug(
@@ -361,16 +295,11 @@ export class FaceAIService implements OnModuleInit {
                                 );
                         }
 
-                        // =================================================
                         // 13. FACE CENTER CHECK
-                        // =================================================
 
                         const imageCenterX = processingWidth / 2;
-
                         const imageCenterY = processingHeight / 2;
-
                         const offsetX = Math.abs(faceCenterX - imageCenterX) / processingWidth;
-
                         const offsetY = Math.abs(faceCenterY - imageCenterY) / processingHeight;
 
                         this.logger.debug(
@@ -390,9 +319,7 @@ export class FaceAIService implements OnModuleInit {
                                 );
                         }
 
-                        // =================================================
                         // 14. RECOGNITION
-                        // =================================================
 
                         /**
                          * Chỉ chạy landmark + descriptor
@@ -404,10 +331,7 @@ export class FaceAIService implements OnModuleInit {
                                 .withFaceLandmarks()
                                 .withFaceDescriptor();
 
-                        // =================================================
                         // 15. SSD RECOGNITION FALLBACK
-                        // =================================================
-
                         if (!faceResult) {
                                 this.logger.warn(
                                         'Tiny recognition pipeline failed → trying SSD recognition'
@@ -415,7 +339,6 @@ export class FaceAIService implements OnModuleInit {
 
                                 const ssdRecognitionOptions = new faceapi.SsdMobilenetv1Options({
                                         minConfidence: this.SSD_MIN_CONFIDENCE,
-
                                         maxResults: 1,
                                 });
 
@@ -425,20 +348,14 @@ export class FaceAIService implements OnModuleInit {
                                         .withFaceDescriptor();
                         }
 
-                        // =================================================
                         // 16. RECOGNITION FAILED
-                        // =================================================
-
                         if (!faceResult) {
                                 throw new BadRequestException(
                                         'Không thể phân tích khuôn mặt. Vui lòng giữ mặt rõ và thử lại.'
                                 );
                         }
 
-                        // =================================================
                         // 17. FINALIZE
-                        // =================================================
-
                         return this.finalizeEmbedding(
                                 faceResult.descriptor,
                                 faceResult.detection.score,
@@ -457,10 +374,7 @@ export class FaceAIService implements OnModuleInit {
                 }
         }
 
-        // ================================================================
         // FINALIZE EMBEDDING
-        // ================================================================
-
         private finalizeEmbedding(
                 descriptor: Float32Array,
                 detectionScore: number,
@@ -476,10 +390,7 @@ export class FaceAIService implements OnModuleInit {
                         throw new BadRequestException('Embedding khuôn mặt không hợp lệ.');
                 }
 
-                // =================================================
-                // EMBEDDING NORM
-                // =================================================
-
+                // EMBEDDING NOR
                 const norm = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
 
                 if (!Number.isFinite(norm) || norm < 0.01) {
@@ -501,10 +412,7 @@ export class FaceAIService implements OnModuleInit {
                 return embedding;
         }
 
-        // ================================================================
         // VALIDATE EMBEDDING
-        // ================================================================
-
         validateEmbedding(embedding: number[] | null | undefined): boolean {
                 if (!embedding || !Array.isArray(embedding)) {
                         return false;
@@ -525,46 +433,34 @@ export class FaceAIService implements OnModuleInit {
                 return true;
         }
 
-        // ================================================================
         // EUCLIDEAN DISTANCE
-        // ================================================================
-
         euclideanDistance(a: number[], b: number[]): number {
                 if (!this.validateEmbedding(a) || !this.validateEmbedding(b)) {
                         return Infinity;
                 }
 
                 let sum = 0;
-
                 for (let i = 0; i < a.length; i++) {
                         const diff = a[i] - b[i];
-
                         sum += diff * diff;
                 }
 
                 return Math.sqrt(sum);
         }
 
-        // ================================================================
         // COSINE SIMILARITY
-        // ================================================================
-
         cosineSimilarity(a: number[], b: number[]): number {
                 if (!a || !b || a.length !== b.length) {
                         return 0;
                 }
 
                 let dot = 0;
-
                 let normA = 0;
-
                 let normB = 0;
 
                 for (let i = 0; i < a.length; i++) {
                         dot += a[i] * b[i];
-
                         normA += a[i] * a[i];
-
                         normB += b[i] * b[i];
                 }
 

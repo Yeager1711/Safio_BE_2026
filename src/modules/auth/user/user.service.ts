@@ -429,4 +429,193 @@ export class UserService implements OnModuleInit {
                                 : 'Đã tắt yêu cầu xác thực Face ID',
                 };
         }
+
+        // =============================
+        // SETUP PROGRESS (cho UI SetupProgress)
+        async getSetupProgress(userId: string) {
+                // 1. Lấy user
+                const user = await this.userRepository.findOne({
+                        where: { id: userId },
+                        select: ['id', 'require_face_id'],
+                });
+
+                if (!user) {
+                        throw new NotFoundException('User not found');
+                }
+
+                // 2. Face status
+                const faceStatus = await this.getFaceIdStatus(userId);
+                const hasFace = faceStatus.is_ready;
+
+                // 3. Camera count
+                const cameraCount = await this.cameraRepository.count({
+                        where: { createdBy: { id: userId } },
+                });
+
+                // 4. Face security
+                const faceSecurityEnabled = Boolean(Number(user.require_face_id));
+
+                // 5. Family / Relative count
+                let familyCount = 0;
+
+                const familyMember = await this.familyMemberRepository.findOne({
+                        where: { user: { id: userId } },
+                        relations: ['familyGroup'],
+                });
+
+                if (familyMember?.familyGroup?.id) {
+                        const totalInGroup = await this.familyMemberRepository.count({
+                                where: {
+                                        familyGroup: { id: familyMember.familyGroup.id },
+                                },
+                        });
+                        familyCount = Math.max(0, totalInGroup - 1);
+                } else {
+                        familyCount = await this.relativeRepository.count({
+                                where: [
+                                        {
+                                                user: { id: userId },
+                                                acceptance_status: 'accepted',
+                                        },
+                                        {
+                                                relativeUser: { id: userId },
+                                                acceptance_status: 'accepted',
+                                        },
+                                ],
+                        });
+                }
+
+                // =============================
+                // TÍNH PROGRESS (cộng dồn độc lập)
+                const WEIGHT = {
+                        face: 25,
+                        camera: 25,
+                        security: 25,
+                        family: 25,
+                };
+
+                let progress = 0;
+
+                if (hasFace) progress += WEIGHT.face;
+                if (cameraCount > 0) progress += WEIGHT.camera;
+                if (faceSecurityEnabled) progress += WEIGHT.security;
+                if (familyCount > 0) progress += WEIGHT.family;
+
+                progress = Math.min(progress, 100);
+
+                // =============================
+                // STEPS
+                const steps = [
+                        {
+                                id: 'account',
+                                title: 'Tạo tài khoản',
+                                description: 'Tài khoản Safio của bạn đã được tạo.',
+                                percentage: 0,
+                                completed: true,
+                                icon: '👤',
+                        },
+                        {
+                                id: 'face',
+                                title: 'Thiết lập khuôn mặt',
+                                description:
+                                        'Đăng ký khuôn mặt để xác thực danh tính và tăng cường bảo mật.',
+                                percentage: 25,
+                                completed: hasFace,
+                                icon: '◉',
+                                action: 'Thiết lập khuôn mặt',
+                        },
+                        {
+                                id: 'camera',
+                                title: 'Kết nối camera',
+                                description:
+                                        'Thêm ít nhất một camera để bắt đầu theo dõi và bảo vệ không gian.',
+                                percentage: 50,
+                                completed: cameraCount > 0,
+                                icon: '▣',
+                                action: 'Thêm camera',
+                        },
+                        {
+                                id: 'security',
+                                title: 'Thiết lập bảo mật',
+                                description:
+                                        'Chọn các chức năng yêu cầu quét khuôn mặt trước khi sử dụng.',
+                                percentage: 75,
+                                completed: faceSecurityEnabled,
+                                icon: '⌁',
+                                action: 'Thiết lập bảo mật',
+                        },
+                        {
+                                id: 'family',
+                                title: 'Thêm người thân',
+                                description:
+                                        'Kết nối ít nhất một thành viên gia đình để cùng nhận cảnh báo.',
+                                percentage: 100,
+                                completed: familyCount > 0,
+                                icon: '♧',
+                                action: 'Thêm người thân',
+                        },
+                ];
+
+                const completedSteps = steps.filter((s) => s.completed).length;
+                const totalSteps = steps.length;
+
+                // =============================
+                // STATUS
+                let status: string;
+                let statusLabel: string;
+                let statusDescription: string;
+
+                if (progress === 0) {
+                        status = 'not_started';
+                        statusLabel = 'Chưa bắt đầu';
+                        statusDescription = 'Hãy bắt đầu thiết lập tài khoản';
+                } else if (progress < 75) {
+                        status = 'in_progress';
+                        statusLabel = 'Đang thiết lập';
+                        statusDescription = 'Tiếp tục hoàn thiện các thiết lập';
+                } else if (progress < 100) {
+                        status = 'almost_done';
+                        statusLabel = 'Gần hoàn tất';
+                        statusDescription = 'Chỉ còn một bước nữa thôi';
+                } else {
+                        status = 'completed';
+                        statusLabel = 'Hoàn tất thiết lập';
+                        statusDescription = 'Tài khoản đã được thiết lập đầy đủ';
+                }
+
+                // =============================
+                // NEXT STEP
+                const nextStep =
+                        progress === 100
+                                ? null
+                                : steps.find((step) => !step.completed && step.id !== 'account') ||
+                                  null;
+
+                return {
+                        hasFace,
+                        cameraCount,
+                        faceSecurityEnabled,
+                        familyCount,
+                        progress,
+                        completedSteps,
+                        totalSteps,
+                        status,
+                        statusLabel,
+                        statusDescription,
+                        nextStep,
+                        steps,
+
+                        details: {
+                                face: {
+                                        has_face_profile: faceStatus.has_face_profile,
+                                        has_embeddings: faceStatus.has_embeddings,
+                                        embedding_count: faceStatus.embedding_count,
+                                        face_status: faceStatus.face_status,
+                                        registered_at: faceStatus.registered_at,
+                                        is_ready: faceStatus.is_ready,
+                                },
+                                require_face_id: faceSecurityEnabled,
+                        },
+                };
+        }
 }

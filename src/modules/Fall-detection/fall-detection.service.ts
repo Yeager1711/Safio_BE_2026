@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import nodemailer from 'nodemailer';
+import twilio from 'twilio';
 
 import { ActiveLog } from '../../entities/active_logs.entity';
 import { Camera } from '../../entities/camera.entity';
@@ -17,6 +18,10 @@ import { UpdateFallWarningDto } from './dto/update-fall-warning.dto';
 @Injectable()
 export class FallDetectionService {
         private readonly logger = new Logger(FallDetectionService.name);
+        private readonly twilioClient = twilio(
+                process.env.TWILIO_ACCOUNT_SID,
+                process.env.TWILIO_AUTH_TOKEN
+        );
 
         private transporter = nodemailer.createTransport({
                 service: 'gmail',
@@ -733,6 +738,7 @@ export class FallDetectionService {
                 }
 
                 activeLog.warningType = newWarningType;
+                activeLog.content_logs = 'Chưa gọi';
                 const savedLog = await this.activeLogRepository.save(activeLog);
 
                 const familyMembers: FamilyMember[] = [];
@@ -846,59 +852,195 @@ export class FallDetectionService {
                         data: logs,
                 };
         }
+        // CALL FAMILY MEMBERS BY TWILIO
+        private async callFamilyMembers(familyMembers: FamilyMember[]): Promise<{
+                success: boolean;
+                called: string[];
+                failed: Array<{
+                        phone: string;
+                        error: string;
+                }>;
+        }> {
+                const message =
+                        'Hệ thống phát hiện người thân bạn đang cần hỗ trợ, yêu cầu giám sát ngay.';
 
-        // =========================================================
-        // FIND ONE
-        // =========================================================
+                const called: string[] = [];
+                const failed: Array<{
+                        phone: string;
+                        error: string;
+                }> = [];
 
-        async findOne(id: string, userId: string) {
-                const log = await this.activeLogRepository.findOne({
-                        where: {
-                                id,
+                // Chuẩn hóa số điện thoại về dạng E.164 (+84...)
+                const normalizePhone = (phone: string): string => {
+                        let cleaned = phone.trim().replace(/\s+/g, '').replace(/-/g, '');
 
-                                user: {
-                                        id: userId,
-                                },
-                        },
+                        // Đã có +84
+                        if (cleaned.startsWith('+84')) {
+                                return cleaned;
+                        }
 
-                        relations: ['camera', 'user', 'warningType'],
-                });
+                        // Bắt đầu bằng 84 (thiếu dấu +)
+                        if (cleaned.startsWith('84')) {
+                                return `+${cleaned}`;
+                        }
 
-                if (!log) {
-                        throw new NotFoundException('Không tìm thấy lịch sử phát hiện té ngã');
+                        // Bắt đầu bằng 0 (số Việt Nam thông thường)
+                        if (cleaned.startsWith('0')) {
+                                return `+84${cleaned.slice(1)}`;
+                        }
+
+                        // Các trường hợp khác → thêm + nếu thiếu
+                        if (!cleaned.startsWith('+')) {
+                                return `+${cleaned}`;
+                        }
+
+                        return cleaned;
+                };
+
+                const phones = familyMembers
+                        .map((member) => member.user?.phone_number)
+                        .filter((phone): phone is string => !!phone && phone.trim().length > 0)
+                        .map(normalizePhone);
+
+                const uniquePhones = [...new Set(phones)];
+
+                if (!uniquePhones.length) {
+                        this.logger.warn(
+                                'Không tìm thấy số điện thoại người thân để thực hiện cuộc gọi'
+                        );
+
+                        return {
+                                success: false,
+                                called,
+                                failed,
+                        };
+                }
+
+                for (const phone of uniquePhones) {
+                        try {
+                                const call = await this.twilioClient.calls.create({
+                                        from: process.env.TWILIO_PHONE_NUMBER!,
+                                        to: phone,
+                                        // Trial account: KHÔNG dùng Google Chirp / Neural voice
+                                        // Dùng Polly hoặc bỏ voice để dùng default
+                                        twiml: `
+                    <Response>
+                        <Say language="vi-VN" voice="Polly.Mia">
+                            ${message}
+                        </Say>
+                    </Response>
+                `,
+                                });
+
+                                called.push(phone);
+
+                                this.logger.log(
+                                        `Đã tạo cuộc gọi Twilio tới ${phone}. Call SID: ${call.sid}`
+                                );
+                        } catch (error) {
+                                const errorMessage =
+                                        error instanceof Error ? error.message : String(error);
+
+                                failed.push({
+                                        phone,
+                                        error: errorMessage,
+                                });
+
+                                this.logger.error(
+                                        `Gọi Twilio tới ${phone} thất bại: ${errorMessage}`
+                                );
+                        }
                 }
 
                 return {
-                        success: true,
-                        data: log,
+                        success: called.length > 0,
+                        called,
+                        failed,
                 };
         }
 
         // =========================================================
-        // REMOVE
-        // =========================================================
-
-        async remove(id: string, userId: string) {
-                const log = await this.activeLogRepository.findOne({
+        // CALL FAMILY FOR FALL WARNING
+        async callFamilyForFall(userId: string, fallDetectionId: string) {
+                // -----------------------------------------------------
+                // 1. TÌM FALL DETECTION
+                const activeLog = await this.activeLogRepository.findOne({
                         where: {
-                                id,
-
-                                user: {
-                                        id: userId,
-                                },
+                                id: fallDetectionId,
                         },
+                        relations: [
+                                'camera',
+                                'camera.createdBy',
+                                'camera.familyGroup',
+                                'user',
+                                'warningType',
+                        ],
                 });
 
-                if (!log) {
-                        throw new NotFoundException('Không tìm thấy lịch sử phát hiện té ngã');
+                if (!activeLog) {
+                        throw new NotFoundException(
+                                `Không tìm thấy fall detection: ${fallDetectionId}`
+                        );
                 }
 
-                await this.activeLogRepository.remove(log);
+                // -----------------------------------------------------
+                // 2. KIỂM TRA QUYỀN
+                if (activeLog.camera?.createdBy?.id !== userId && activeLog.user?.id !== userId) {
+                        throw new BadRequestException(
+                                'Bạn không có quyền thực hiện cuộc gọi cảnh báo này'
+                        );
+                }
+
+                // -----------------------------------------------------
+                // 3. KIỂM TRA FAMILY GROUP
+                const familyGroupId = activeLog.camera?.familyGroup?.id;
+
+                if (!familyGroupId) {
+                        throw new BadRequestException('Camera chưa thuộc family group');
+                }
+
+                // -----------------------------------------------------
+                // 4. LẤY FAMILY MEMBERS
+                const familyMembers = await this.familyMemberRepository.find({
+                        where: {
+                                familyGroup: {
+                                        id: familyGroupId,
+                                },
+                        },
+                        relations: ['user'],
+                });
+
+                if (!familyMembers.length) {
+                        throw new NotFoundException('Không tìm thấy thành viên nào trong gia đình');
+                }
+
+                // -----------------------------------------------------
+                // 5. GỌI TWILIO
+                const callResult = await this.callFamilyMembers(familyMembers);
+
+                // 6. NẾU CÓ ÍT NHẤT 1 CUỘC GỌI ĐƯỢC -> ĐÃ GỌI
+                if (callResult.called.length > 0) {
+                        activeLog.content_logs = 'Đã gọi';
+
+                        await this.activeLogRepository.save(activeLog);
+                }
 
                 return {
-                        success: true,
+                        success: callResult.success,
 
-                        message: 'Xóa lịch sử phát hiện té ngã thành công',
+                        message:
+                                callResult.called.length > 0
+                                        ? 'Đã thực hiện cuộc gọi cảnh báo đến người thân'
+                                        : 'Không thực hiện được cuộc gọi nào',
+
+                        data: {
+                                fallDetectionId: activeLog.id,
+                                contentLogs: activeLog.content_logs,
+                                calledCount: callResult.called.length,
+                                called: callResult.called,
+                                failedCount: callResult.failed.length,
+                                failed: callResult.failed,
+                        },
                 };
         }
 }

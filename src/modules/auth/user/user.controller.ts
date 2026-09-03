@@ -93,4 +93,14 @@ export class UserController {
 
                 return this.userService.updateRequireFaceId(req.user.user_id, requireFaceId);
         }
+
+        // Lấy tiến trình thiết lập tài khoản (dùng cho màn Setup Progress)
+        @Get('setup-progress')
+        async getSetupProgress(@Req() req: AuthenticatedRequest) {
+                if (!req.user?.user_id) {
+                        throw new UnauthorizedException('User not authenticated');
+                }
+
+                return this.userService.getSetupProgress(req.user.user_id);
+        }
 }

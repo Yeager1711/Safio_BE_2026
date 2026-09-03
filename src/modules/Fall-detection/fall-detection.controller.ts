@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UnauthorizedException } from '@nestjs/common';
+import {
+        Body,
+        Controller,
+        Get,
+        Param,
+        Patch,
+        Post,
+        Query,
+        Req,
+        UnauthorizedException,
+} from '@nestjs/common';
 
 import { Request } from 'express';
 
@@ -30,6 +40,7 @@ export class FallDetectionController {
 
                 return this.fallDetectionService.create(user.user_id, dto);
         }
+
         @Get('timeline')
         async getTimeline(@Req() req: AuthenticatedRequest, @Query() query: GetFallTimelineDto) {
                 const user = req.user;
@@ -54,5 +65,17 @@ export class FallDetectionController {
                 }
 
                 return this.fallDetectionService.updateWarning(user.user_id, id, dto);
+        }
+        
+        // CALL FAMILY MEMBERS
+        @Post(':id/call')
+        async callFamily(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
+                const user = req.user;
+
+                if (!user?.user_id) {
+                        throw new UnauthorizedException('Bạn chưa đăng nhập');
+                }
+
+                return this.fallDetectionService.callFamilyForFall(user.user_id, id);
         }
 }

@@ -336,6 +336,10 @@ export class AppModule {
                                         method: RequestMethod.GET,
                                 },
                                 {
+                                        path: 'users/setup-progress',
+                                        method: RequestMethod.GET,
+                                },
+                                {
                                         path: 'users/search_User',
                                         method: RequestMethod.GET,
                                 },
@@ -444,6 +448,10 @@ export class AppModule {
                                 {
                                         path: 'fall-detection/:id/warning',
                                         method: RequestMethod.PATCH,
+                                },
+                                {
+                                        path: 'fall-detection/:id/call',
+                                        method: RequestMethod.POST,
                                 }
                         );
         }
