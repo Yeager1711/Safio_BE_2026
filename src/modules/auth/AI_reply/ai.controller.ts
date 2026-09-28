@@ -24,11 +24,6 @@ export class AI_Controller {
 
         @Post('ask-safio')
         async askMintoBot(@Body('question') question: string, @Req() req: AuthenticatedRequest) {
-                // console.log('================ AI REQUEST ================');
-                // console.log('Authorization:', req.headers.authorization);
-                // console.log('req.user:', req.user);
-                // console.log('============================================');
-
                 if (!question?.trim()) {
                         throw new BadRequestException('Câu hỏi không được để trống');
                 }
@@ -37,11 +32,11 @@ export class AI_Controller {
                         throw new UnauthorizedException('User chưa được xác thực');
                 }
 
-                const response = await this.aiService.answerAsSafioAI(
-                        req.user.user_id,
-                        question,
-                        req.user.full_name
-                );
+                const response = await this.aiService.answerAsSafioAI(req.user.user_id, question, {
+                        full_name: req.user.full_name,
+                        email: req.user.email,
+                        role: req.user.role,
+                });
 
                 return {
                         response,

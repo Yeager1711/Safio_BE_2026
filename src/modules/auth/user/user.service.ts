@@ -512,7 +512,7 @@ export class UserService implements OnModuleInit {
                                 description: 'Tài khoản Safio của bạn đã được tạo.',
                                 percentage: 0,
                                 completed: true,
-                                icon: '👤',
+                                icon: '👤', // Tài khoản
                         },
                         {
                                 id: 'face',
@@ -521,7 +521,7 @@ export class UserService implements OnModuleInit {
                                         'Đăng ký khuôn mặt để xác thực danh tính và tăng cường bảo mật.',
                                 percentage: 25,
                                 completed: hasFace,
-                                icon: '◉',
+                                icon: '😊', // Khuôn mặt
                                 action: 'Thiết lập khuôn mặt',
                         },
                         {
@@ -531,7 +531,7 @@ export class UserService implements OnModuleInit {
                                         'Thêm ít nhất một camera để bắt đầu theo dõi và bảo vệ không gian.',
                                 percentage: 50,
                                 completed: cameraCount > 0,
-                                icon: '▣',
+                                icon: '📷', // Camera
                                 action: 'Thêm camera',
                         },
                         {
@@ -541,7 +541,7 @@ export class UserService implements OnModuleInit {
                                         'Chọn các chức năng yêu cầu quét khuôn mặt trước khi sử dụng.',
                                 percentage: 75,
                                 completed: faceSecurityEnabled,
-                                icon: '⌁',
+                                icon: '🔒', // Bảo mật
                                 action: 'Thiết lập bảo mật',
                         },
                         {
@@ -551,7 +551,7 @@ export class UserService implements OnModuleInit {
                                         'Kết nối ít nhất một thành viên gia đình để cùng nhận cảnh báo.',
                                 percentage: 100,
                                 completed: familyCount > 0,
-                                icon: '♧',
+                                icon: '👨‍👩‍👧', // Người thân / Gia đình
                                 action: 'Thêm người thân',
                         },
                 ];
