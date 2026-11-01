@@ -1,11 +1,25 @@
-// src/auth/dto/login.dto.ts
-import { IsEmail, IsNotEmpty } from 'class-validator';
+import {
+        IsEmail,
+        IsNotEmpty,
+        IsObject,
+        IsOptional,
+        IsString,
+        ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { DeviceInfoDto } from './device-info.dto';
 
 export class LoginDto {
-        @IsEmail({}, { message: 'Email không hợp lệ' })
-        @IsNotEmpty({ message: 'Email không được để trống' })
+        @IsEmail()
         email: string;
 
-        @IsNotEmpty({ message: 'Mật khẩu không được để trống' })
+        @IsString()
+        @IsNotEmpty()
         password: string;
+
+        @IsOptional()
+        @IsObject()
+        @ValidateNested()
+        @Type(() => DeviceInfoDto)
+        deviceInfo?: DeviceInfoDto;
 }

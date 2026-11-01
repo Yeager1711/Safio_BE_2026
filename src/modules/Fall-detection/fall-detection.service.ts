@@ -275,11 +275,26 @@ export class FallDetectionService {
                 }
 
                 // -----------------------------------------------------
-                // KIỂM TRA CAMERA THUỘC USER
+                // KIỂM TRA USER THUỘC FAMILY GROUP CỦA CAMERA
                 // -----------------------------------------------------
 
-                if (camera.createdBy?.id !== user.id) {
-                        throw new BadRequestException('Camera không thuộc về user này');
+                const cameraFamilyGroupId = camera.familyGroup?.id;
+
+                if (!cameraFamilyGroupId) {
+                        throw new BadRequestException('Camera chưa thuộc Family Group');
+                }
+
+                const isFamilyMember = await this.familyMemberRepository.findOne({
+                        where: {
+                                user: { id: user.id },
+                                familyGroup: { id: cameraFamilyGroupId },
+                        },
+                });
+
+                if (!isFamilyMember) {
+                        throw new BadRequestException(
+                                'Bạn không thuộc Family Group có quyền sử dụng camera này'
+                        );
                 }
 
                 // -----------------------------------------------------
@@ -484,105 +499,154 @@ export class FallDetectionService {
         }
 
         // =========================================================
-        // GET FALL TIMELINE
+        // FAMILY GROUP HELPERS & STATISTICS
         // =========================================================
-        async getTimeline(userId: string, query: GetFallTimelineDto) {
-                const page = query.page ?? 1;
-                const limit = query.limit ?? 50;
 
-                const skip = (page - 1) * limit;
-
-                // =========================================================
-                // 1. KIỂM TRA USER
-                // =========================================================
-
-                const user = await this.userRepository.findOne({
+        private async getUserFamilyGroupId(userId: string): Promise<string | null> {
+                const familyMember = await this.familyMemberRepository.findOne({
                         where: {
-                                id: userId,
+                                user: { id: userId },
                         },
+                        relations: ['familyGroup'],
+                });
+
+                const familyGroupId = familyMember?.familyGroup?.id ?? null;
+
+                this.logger.log(
+                        `[FAMILY GROUP] user=${userId}, familyGroup=${familyGroupId ?? 'NOT_FOUND'}`
+                );
+
+                return familyGroupId;
+        }
+
+        private async getFamilyActivityLogCount(familyGroupId: string): Promise<number> {
+                const result = await this.activeLogRepository
+                        .createQueryBuilder('fall')
+                        .innerJoin('fall.camera', 'camera')
+                        .innerJoin('camera.familyGroup', 'familyGroup')
+                        .where('familyGroup.id = :familyGroupId', { familyGroupId })
+                        .select('COUNT(DISTINCT fall.id)', 'total')
+                        .getRawOne();
+
+                return Number(result?.total ?? 0);
+        }
+
+        async getFamilyNotificationCount(userId: string): Promise<number> {
+                const familyGroupId = await this.getUserFamilyGroupId(userId);
+
+                if (!familyGroupId) {
+                        return 0;
+                }
+
+                return this.notificationRepository
+                        .createQueryBuilder('notification')
+                        .innerJoin('notification.activeLog', 'fall')
+                        .innerJoin('fall.camera', 'camera')
+                        .innerJoin('camera.familyGroup', 'familyGroup')
+                        .where('familyGroup.id = :familyGroupId', { familyGroupId })
+                        .getCount();
+        }
+
+        async getFamilyFallCount(userId: string): Promise<number> {
+                const familyGroupId = await this.getUserFamilyGroupId(userId);
+
+                if (!familyGroupId) {
+                        return 0;
+                }
+
+                const total = await this.getFamilyActivityLogCount(familyGroupId);
+
+                this.logger.log(
+                        `[FAMILY FALL COUNT] user=${userId}, familyGroup=${familyGroupId}, total=${total}`
+                );
+
+                return total;
+        }
+
+        async getFamilyStatistics(userId: string): Promise<{
+                activity_logs: number;
+                notifications: number;
+        }> {
+                const familyGroupId = await this.getUserFamilyGroupId(userId);
+
+                if (!familyGroupId) {
+                        return {
+                                activity_logs: 0,
+                                notifications: 0,
+                        };
+                }
+
+                const [activityLogs, notifications] = await Promise.all([
+                        this.activeLogRepository
+                                .createQueryBuilder('fall')
+                                .innerJoin('fall.camera', 'camera')
+                                .innerJoin('camera.familyGroup', 'familyGroup')
+                                .where('familyGroup.id = :familyGroupId', { familyGroupId })
+                                .getCount(),
+
+                        this.notificationRepository
+                                .createQueryBuilder('notification')
+                                .innerJoin('notification.activeLog', 'fall')
+                                .innerJoin('fall.camera', 'camera')
+                                .innerJoin('camera.familyGroup', 'familyGroup')
+                                .where('familyGroup.id = :familyGroupId', { familyGroupId })
+                                .getCount(),
+                ]);
+
+                this.logger.log(
+                        `[FAMILY STATISTICS] user=${userId}, familyGroup=${familyGroupId}, activity_logs=${activityLogs}, notifications=${notifications}`
+                );
+
+                return {
+                        activity_logs: activityLogs,
+                        notifications,
+                };
+        }
+
+        // =========================================================
+        // GET FALL TIMELINE - FAMILY GROUP
+        async getTimeline(userId: string, query: GetFallTimelineDto) {
+                const user = await this.userRepository.findOne({
+                        where: { id: userId },
                 });
 
                 if (!user) {
                         throw new NotFoundException('Không tìm thấy người dùng');
                 }
 
-                // =========================================================
-                // 2. LẤY FAMILY GROUP CỦA USER
-                // =========================================================
-                //
-                // KHÔNG dùng:
-                // user.family_group_id
-                //
-                // Vì User entity hiện tại không có @Column cho field này.
-                //
-                // Lấy thông qua family_members.
-                // =========================================================
+                const page = Math.max(1, Number(query.page) || 1);
+                const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
+                const skip = (page - 1) * limit;
 
-                const familyMember = await this.familyMemberRepository.findOne({
-                        where: {
-                                user: {
-                                        id: userId,
-                                },
-                        },
-                        relations: ['familyGroup'],
-                });
+                const familyGroupId = await this.getUserFamilyGroupId(userId);
 
-                if (!familyMember?.familyGroup) {
+                if (!familyGroupId) {
                         return {
                                 success: true,
-
                                 data: [],
-
                                 pagination: {
                                         page,
                                         limit,
                                         total: 0,
                                         totalPages: 0,
                                 },
+                                statistics: {
+                                        activity_logs: 0,
+                                        notifications: 0,
+                                },
                         };
                 }
 
-                const familyGroupId = familyMember.familyGroup.id;
-
-                // =========================================================
-                // 3. QUERY ACTIVE LOG
-                // =========================================================
-
+                // Tất cả thành viên cùng truy vấn trên một Family Group
                 const queryBuilder = this.activeLogRepository
                         .createQueryBuilder('fall')
-
-                        // -------------------------------------------------
-                        // CAMERA
-                        // -------------------------------------------------
-
                         .leftJoinAndSelect('fall.camera', 'camera')
-
-                        // -------------------------------------------------
-                        // WARNING TYPE
-                        // -------------------------------------------------
-
                         .leftJoinAndSelect('fall.warningType', 'warningType')
-
-                        // -------------------------------------------------
-                        // CHỈ LẤY CAMERA THUỘC FAMILY GROUP
-                        // -------------------------------------------------
-
-                        .where('camera.family_group_id = :familyGroupId', {
+                        .leftJoinAndSelect('fall.user', 'createdBy')
+                        .innerJoin('camera.familyGroup', 'familyGroup')
+                        .where('familyGroup.id = :familyGroupId', {
                                 familyGroupId,
-                        })
-
-                        // -------------------------------------------------
-                        // MỚI NHẤT TRƯỚC
-                        // -------------------------------------------------
-
-                        .orderBy('fall.createdAt', 'DESC')
-
-                        .skip(skip)
-                        .take(limit);
-
-                // =========================================================
-                // 4. FILTER WARNING TYPE
-                // =========================================================
+                        });
 
                 if (query.warningTypeId) {
                         queryBuilder.andWhere('warningType.id = :warningTypeId', {
@@ -590,73 +654,102 @@ export class FallDetectionService {
                         });
                 }
 
-                // =========================================================
-                // 5. EXECUTE QUERY
-                // =========================================================
+                const countQuery = queryBuilder.clone();
 
-                const [records, total] = await queryBuilder.getManyAndCount();
+                const [records, total] = await Promise.all([
+                        queryBuilder
+                                .orderBy('fall.createdAt', 'DESC')
+                                .skip(skip)
+                                .take(limit)
+                                .getMany(),
 
-                // =========================================================
-                // 6. MAP DATA
-                // =========================================================
+                        countQuery.getCount(),
+                ]);
 
                 const data = records.map((fall) => ({
                         id: fall.id,
 
                         camera: {
                                 id: fall.camera?.id ?? null,
-
                                 name: fall.camera?.cam_name ?? null,
-
                                 location: fall.camera?.location ?? null,
                         },
 
-                        // ActiveLog hiện chỉ có person_id
-                        // Chưa có relation Person
+                        // Người được phát hiện trong camera
                         person: {
                                 id: fall.person_id ?? null,
-
                                 name: null,
                         },
 
+                        // Tài khoản liên quan đến bản ghi ActiveLog
+                        createdBy: fall.user
+                                ? {
+                                          id: fall.user.id,
+                                          name: fall.user.full_name ?? null,
+                                  }
+                                : null,
+
                         action: fall.action ?? null,
-
                         fallType: fall.fall_type ?? null,
-
                         behavior: fall.behavior ?? null,
-
                         snapshotUrl: fall.snapshot_url ?? null,
 
                         warning: fall.warningType
                                 ? {
                                           id: fall.warningType.id,
-
                                           name: fall.warningType.level,
-
                                           level: fall.warningType.level ?? null,
-
                                           description: fall.warningType.description ?? null,
                                   }
                                 : null,
 
                         createdAt: fall.createdAt,
-
                         updatedAt: fall.updatedAt,
                 }));
+
+                const statistics = await this.getFamilyStatistics(userId);
+
                 return {
                         success: true,
-
                         data,
-
                         pagination: {
                                 page,
-
                                 limit,
-
                                 total,
-
                                 totalPages: Math.ceil(total / limit),
                         },
+                        statistics,
+                };
+        }
+
+        // =========================================================
+        // FIND ALL - FAMILY GROUP
+        async findAll(userId: string) {
+                const familyGroupId = await this.getUserFamilyGroupId(userId);
+
+                if (!familyGroupId) {
+                        return {
+                                success: true,
+                                data: [],
+                        };
+                }
+
+                const logs = await this.activeLogRepository
+                        .createQueryBuilder('fall')
+                        .leftJoinAndSelect('fall.camera', 'camera')
+                        .leftJoinAndSelect('fall.user', 'user')
+                        .leftJoinAndSelect('fall.warningType', 'warningType')
+                        .innerJoin('camera.familyGroup', 'familyGroup')
+                        .where('familyGroup.id = :familyGroupId', {
+                                familyGroupId,
+                        })
+                        .orderBy('fall.createdAt', 'DESC')
+                        .getMany();
+
+                return {
+                        success: true,
+                        data: logs,
+                        statistics: await this.getFamilyStatistics(userId),
                 };
         }
 
@@ -679,8 +772,23 @@ export class FallDetectionService {
                         );
                 }
 
-                if (activeLog.camera?.createdBy?.id !== userId && activeLog.user?.id !== userId) {
-                        throw new BadRequestException('Bạn không có quyền cập nhật cảnh báo này');
+                const familyGroupId = activeLog.camera?.familyGroup?.id;
+
+                if (!familyGroupId) {
+                        throw new BadRequestException('Sự kiện không thuộc Family Group');
+                }
+
+                const isFamilyMember = await this.familyMemberRepository.findOne({
+                        where: {
+                                user: { id: userId },
+                                familyGroup: { id: familyGroupId },
+                        },
+                });
+
+                if (!isFamilyMember) {
+                        throw new BadRequestException(
+                                'Bạn không thuộc Family Group có quyền cập nhật cảnh báo này'
+                        );
                 }
 
                 const newWarningType = await this.warningTypeRepository.findOne({
@@ -742,7 +850,6 @@ export class FallDetectionService {
                 const savedLog = await this.activeLogRepository.save(activeLog);
 
                 const familyMembers: FamilyMember[] = [];
-                const familyGroupId = activeLog.camera?.familyGroup?.id;
 
                 if (familyGroupId) {
                         const members = await this.familyMemberRepository.find({
@@ -751,6 +858,7 @@ export class FallDetectionService {
                                 },
                                 relations: ['user'],
                         });
+
                         familyMembers.push(...members);
                 } else {
                         this.logger.warn(`Camera ${activeLog.camera?.id} chưa có family group`);
@@ -828,30 +936,6 @@ export class FallDetectionService {
                 };
         }
 
-        // =========================================================
-        // FIND ALL
-        // =========================================================
-
-        async findAll(userId: string) {
-                const logs = await this.activeLogRepository.find({
-                        where: {
-                                user: {
-                                        id: userId,
-                                },
-                        },
-
-                        relations: ['camera', 'user', 'warningType'],
-
-                        order: {
-                                createdAt: 'DESC',
-                        },
-                });
-
-                return {
-                        success: true,
-                        data: logs,
-                };
-        }
         // CALL FAMILY MEMBERS BY TWILIO
         private async callFamilyMembers(familyMembers: FamilyMember[]): Promise<{
                 success: boolean;
@@ -865,42 +949,15 @@ export class FallDetectionService {
                         'Hệ thống phát hiện người thân bạn đang cần hỗ trợ, yêu cầu giám sát ngay.';
 
                 const called: string[] = [];
+
                 const failed: Array<{
                         phone: string;
                         error: string;
                 }> = [];
 
-                // Chuẩn hóa số điện thoại về dạng E.164 (+84...)
-                const normalizePhone = (phone: string): string => {
-                        let cleaned = phone.trim().replace(/\s+/g, '').replace(/-/g, '');
-
-                        // Đã có +84
-                        if (cleaned.startsWith('+84')) {
-                                return cleaned;
-                        }
-
-                        // Bắt đầu bằng 84 (thiếu dấu +)
-                        if (cleaned.startsWith('84')) {
-                                return `+${cleaned}`;
-                        }
-
-                        // Bắt đầu bằng 0 (số Việt Nam thông thường)
-                        if (cleaned.startsWith('0')) {
-                                return `+84${cleaned.slice(1)}`;
-                        }
-
-                        // Các trường hợp khác → thêm + nếu thiếu
-                        if (!cleaned.startsWith('+')) {
-                                return `+${cleaned}`;
-                        }
-
-                        return cleaned;
-                };
-
                 const phones = familyMembers
                         .map((member) => member.user?.phone_number)
-                        .filter((phone): phone is string => !!phone && phone.trim().length > 0)
-                        .map(normalizePhone);
+                        .filter((phone): phone is string => !!phone && phone.trim().length > 0);
 
                 const uniquePhones = [...new Set(phones)];
 
@@ -921,15 +978,16 @@ export class FallDetectionService {
                                 const call = await this.twilioClient.calls.create({
                                         from: process.env.TWILIO_PHONE_NUMBER!,
                                         to: phone,
-                                        // Trial account: KHÔNG dùng Google Chirp / Neural voice
-                                        // Dùng Polly hoặc bỏ voice để dùng default
                                         twiml: `
-                    <Response>
-                        <Say language="vi-VN" voice="Polly.Mia">
-                            ${message}
-                        </Say>
-                    </Response>
-                `,
+                                        <Response>
+                                                <Say
+                                                        language="vi-VN"
+                                                        voice="Google.vi-VN-Chirp3-HD-Aoede"
+                                                >
+                                                        ${message}
+                                                </Say>
+                                        </Response>
+                                `,
                                 });
 
                                 called.push(phone);
@@ -985,9 +1043,22 @@ export class FallDetectionService {
 
                 // -----------------------------------------------------
                 // 2. KIỂM TRA QUYỀN
-                if (activeLog.camera?.createdBy?.id !== userId && activeLog.user?.id !== userId) {
+                const eventFamilyGroupId = activeLog.camera?.familyGroup?.id;
+
+                if (!eventFamilyGroupId) {
+                        throw new BadRequestException('Sự kiện chưa thuộc Family Group');
+                }
+
+                const isFamilyMember = await this.familyMemberRepository.findOne({
+                        where: {
+                                user: { id: userId },
+                                familyGroup: { id: eventFamilyGroupId },
+                        },
+                });
+
+                if (!isFamilyMember) {
                         throw new BadRequestException(
-                                'Bạn không có quyền thực hiện cuộc gọi cảnh báo này'
+                                'Bạn không thuộc Family Group có quyền thực hiện cuộc gọi này'
                         );
                 }
 

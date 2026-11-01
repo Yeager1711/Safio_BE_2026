@@ -26,27 +26,13 @@ export class FaceRecognitionLog {
         })
         camera_id: string;
 
-        /*
-         * =====================================================
-         * FAMILY GROUP
-         * =====================================================
-         */
-
         @Index()
         @Column({
                 name: 'family_group_id',
                 type: 'char',
                 length: 36,
         })
-        family_group_id: string;
-
-        /*
-         * =====================================================
-         * USER ĐƯỢC NHẬN DIỆN
-         *
-         * NULL nếu là người lạ.
-         * =====================================================
-         */
+        family_group_id: string
 
         @Index()
         @Column({
@@ -57,35 +43,12 @@ export class FaceRecognitionLog {
         })
         recognized_user_id: string | null;
 
-        /*
-         * =====================================================
-         * LOẠI NHẬN DIỆN
-         *
-         * family
-         * stranger
-         * unknown
-         * =====================================================
-         */
-
         @Column({
                 name: 'recognition_type',
                 type: 'varchar',
                 length: 30,
         })
         recognition_type: string;
-
-        /*
-         * =====================================================
-         * ĐỘ GIỐNG NHAU
-         *
-         * Ví dụ:
-         *
-         * 0.9821
-         * 0.8734
-         * 0.4123
-         *
-         * =====================================================
-         */
 
         @Column({
                 type: 'decimal',
@@ -94,25 +57,12 @@ export class FaceRecognitionLog {
                 default: 0,
         })
         similarity: number;
-
-        /*
-         * =====================================================
-         * SNAPSHOT
-         * =====================================================
-         */
-
         @Column({
                 name: 'snapshot_url',
                 type: 'text',
                 nullable: true,
         })
         snapshot_url: string | null;
-
-        /*
-         * =====================================================
-         * LOG CONTENT
-         * =====================================================
-         */
 
         @Column({
                 name: 'content_logs',
@@ -133,12 +83,6 @@ export class FaceRecognitionLog {
         })
         updated_at: Date;
 
-        /*
-         * =====================================================
-         * CAMERA RELATION
-         * =====================================================
-         */
-
         @ManyToOne(() => Camera, {
                 onDelete: 'CASCADE',
         })
@@ -148,12 +92,6 @@ export class FaceRecognitionLog {
         })
         camera: Camera;
 
-        /*
-         * =====================================================
-         * FAMILY GROUP RELATION
-         * =====================================================
-         */
-
         @ManyToOne(() => FamilyGroup, {
                 onDelete: 'CASCADE',
         })
@@ -162,14 +100,6 @@ export class FaceRecognitionLog {
                 referencedColumnName: 'id',
         })
         family_group: FamilyGroup;
-
-        /*
-         * =====================================================
-         * RECOGNIZED USER
-         *
-         * NULL nếu stranger.
-         * =====================================================
-         */
 
         @ManyToOne(() => User, {
                 nullable: true,

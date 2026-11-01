@@ -6,7 +6,9 @@ import {
         HttpStatus,
         UsePipes,
         ValidationPipe,
+        Req,
 } from '@nestjs/common';
+import { Request } from 'express';
 
 import { AuthUserService } from './login_user.service';
 import { LoginDto } from '../dto/login.dto';
@@ -17,12 +19,21 @@ export class AuthUserController {
 
         @Post('login')
         @HttpCode(HttpStatus.OK)
-        @UsePipes(new ValidationPipe({ transform: true }))
-        async login(@Body() loginDto: LoginDto) {
-                return this.authUserService.login(loginDto.email, loginDto.password);
+        @UsePipes(
+                new ValidationPipe({
+                        transform: true,
+                        whitelist: true,
+                })
+        )
+        async login(@Body() loginDto: LoginDto, @Req() req: Request) {
+                return this.authUserService.login(
+                        loginDto.email,
+                        loginDto.password,
+                        loginDto.deviceInfo,
+                        req.ip
+                );
         }
 
-        // Chưa triển khai Google Login
         @Post('google')
         @HttpCode(HttpStatus.OK)
         async loginWithGoogle() {

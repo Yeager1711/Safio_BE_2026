@@ -1,17 +1,20 @@
-// src/users/user.controller.ts
 import {
         Controller,
         Get,
         Req,
         UnauthorizedException,
-        NotFoundException,
         Query,
         BadRequestException,
         Patch,
         Body,
+        Post,
+        HttpCode,
+        HttpStatus,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { UserService } from './user.service';
+import { ForgotPasswordDto, VerifyResetOtpDto, ResetPasswordDto } from '../dto/forgot-password.dto';
+import { RequestChangePasswordOtpDto, ChangePasswordDto } from '../dto/change-password.dto';
 
 interface AuthenticatedRequest extends Request {
         user?: { user_id?: string; email?: string; role?: string };
@@ -102,5 +105,76 @@ export class UserController {
                 }
 
                 return this.userService.getSetupProgress(req.user.user_id);
+        }
+
+        @Post('forgot-password')
+        @HttpCode(HttpStatus.OK)
+        async forgotPassword(@Body() dto: ForgotPasswordDto) {
+                return this.userService.forgotPassword(dto.email);
+        }
+
+        @Post('verify-reset-otp')
+        @HttpCode(HttpStatus.OK)
+        async verifyResetOtp(@Body() dto: VerifyResetOtpDto) {
+                return this.userService.verifyResetOtp(dto.email, dto.otp);
+        }
+
+        @Post('reset-password')
+        @HttpCode(HttpStatus.OK)
+        async resetPassword(@Body() dto: ResetPasswordDto) {
+                if (dto.newPassword !== dto.confirmPassword) {
+                        throw new BadRequestException('Mật khẩu xác nhận không khớp.');
+                }
+                return this.userService.resetPassword(dto.resetToken, dto.newPassword);
+        }
+
+        //  ============== api change password ================
+        /*
+         * Lấy OTP để frontend hiển thị + tự điền
+         * POST /users/change-password/otp
+         */
+        @Post('change-password/otp')
+        @HttpCode(HttpStatus.OK)
+        async requestChangePasswordOtp(
+                @Req() req: AuthenticatedRequest,
+                @Body() dto: RequestChangePasswordOtpDto
+        ) {
+                if (!req.user?.user_id) {
+                        throw new UnauthorizedException('User not authenticated');
+                }
+
+                return this.userService.requestChangePasswordOtp(
+                        req.user.user_id,
+                        dto.method,
+                        dto.email,
+                        dto.currentPassword
+                );
+        }
+
+        /**
+         * Đổi mật khẩu (có kiểm tra không được trùng mật khẩu cũ)
+         * POST /users/change-password
+         */
+        @Post('change-password')
+        @HttpCode(HttpStatus.OK)
+        async changePassword(@Req() req: AuthenticatedRequest, @Body() dto: ChangePasswordDto) {
+                if (!req.user?.user_id) {
+                        throw new UnauthorizedException('User not authenticated');
+                }
+
+                if (dto.newPassword !== dto.confirmPassword) {
+                        throw new BadRequestException('Mật khẩu xác nhận không khớp.');
+                }
+
+                return this.userService.changePassword(req.user.user_id, dto.otp, dto.newPassword);
+        }
+
+        @Get('device-sessions')
+        async getDeviceSessions(@Req() req: AuthenticatedRequest) {
+                if (!req.user?.user_id) {
+                        throw new UnauthorizedException('User not authenticated');
+                }
+
+                return this.userService.getDeviceSessions(req.user.user_id);
         }
 }

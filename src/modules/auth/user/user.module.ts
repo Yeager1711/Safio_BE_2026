@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { JwtModule } from '@nestjs/jwt';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 import { UserService } from './user.service';
 import { UserController } from './user.controller';
@@ -15,6 +17,7 @@ import { FamilyMember } from '../../../entities/family-member.entity';
 import { FamilyGroup } from '../../../entities/family-group.entity';
 import { FaceProfile } from '../../../entities/face_profile.entity';
 import { FaceEmbedding } from '../../../entities/face_embedding.entity';
+import { UserSession } from '../../../entities/user-session.entity';
 
 @Module({
         imports: [
@@ -30,7 +33,20 @@ import { FaceEmbedding } from '../../../entities/face_embedding.entity';
                         FamilyGroup,
                         FaceProfile,
                         FaceEmbedding,
+                        UserSession,
                 ]),
+                ConfigModule,
+                JwtModule.registerAsync({
+                        imports: [ConfigModule],
+                        useFactory: (config: ConfigService) => ({
+                                secret:
+                                        config.get<string>('JWT_SECRET') ||
+                                        process.env.JWT_SECRET ||
+                                        'your-secret-key',
+                                signOptions: { expiresIn: '15m' },
+                        }),
+                        inject: [ConfigService],
+                }),
         ],
         controllers: [UserController],
         providers: [UserService],

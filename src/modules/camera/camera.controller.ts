@@ -1,6 +1,18 @@
-import { Body, Controller, Get, Post, Req, UnauthorizedException } from '@nestjs/common';
+import {
+        Body,
+        Controller,
+        Get,
+        Patch,
+        Param,
+        Post,
+        Req,
+        UnauthorizedException,
+} from '@nestjs/common';
+
 import { Request } from 'express';
+
 import { CameraService } from './camera.service';
+
 import { CreateCameraDto } from './dto/create-camera.dto';
 
 interface AuthenticatedRequest extends Request {
@@ -36,5 +48,20 @@ export class CameraController {
                 }
 
                 return this.cameraService.getCameras(user.user_id);
+        }
+
+        @Patch(':cameraId/status')
+        async updateStatus(
+                @Req() req: AuthenticatedRequest,
+                @Param('cameraId') cameraId: string,
+                @Body() body: { status: 'active' | 'inactive' }
+        ) {
+                const user = req.user;
+
+                if (!user?.user_id) {
+                        throw new UnauthorizedException('Bạn chưa đăng nhập');
+                }
+
+                return this.cameraService.updateCameraStatus(user.user_id, cameraId, body.status);
         }
 }

@@ -228,7 +228,7 @@ import { AuthUserLoginModule } from './modules/auth/login/login_user.module';
 import { UserModule } from './modules/auth/user/user.module';
 import { RelativeModule } from './modules/auth/Relative/relative.module';
 import { CameraModule } from './modules/camera/camera.module';
-import { AI_Module } from './modules/auth/AI_reply/ai.module';
+import { AI_Module } from './modules/auth/AI_SIA__Service/ai.module';
 import { FaceIdModule } from './modules/auth/FaceID/face-id.module';
 import { FallDetectionModule } from './modules/Fall-detection/fall-detection.module';
 
@@ -245,6 +245,7 @@ import { FamilyGroup } from './entities/family-group.entity';
 import { FaceProfile } from './entities/face_profile.entity';
 import { FaceEmbedding } from './entities/face_embedding.entity';
 import { FaceRecognitionLog } from './entities/face_recognition_log.entity';
+import { UserSession } from './entities/user-session.entity';
 
 @Module({
         imports: [
@@ -286,6 +287,7 @@ import { FaceRecognitionLog } from './entities/face_recognition_log.entity';
                                 FaceProfile,
                                 FaceEmbedding,
                                 FaceRecognitionLog,
+                                UserSession,
                         ],
 
                         synchronize: process.env.NODE_ENV === 'development', // Nên false trên production
@@ -325,6 +327,19 @@ export class AppModule {
                                 {
                                         path: 'auth/register',
                                         method: RequestMethod.POST,
+                                },
+
+                                {
+                                        path: 'users/forgot-password',
+                                        method: RequestMethod.POST,
+                                },
+                                {
+                                        path: 'users/verify-reset-otp',
+                                        method: RequestMethod.POST,
+                                },
+                                {
+                                        path: 'users/reset-password',
+                                        method: RequestMethod.POST,
                                 }
                         )
                         .forRoutes(
@@ -352,6 +367,20 @@ export class AppModule {
                                 {
                                         path: 'users/face-id/require',
                                         method: RequestMethod.PATCH,
+                                },
+
+                                {
+                                        path: 'users/change-password/otp',
+                                        method: RequestMethod.POST,
+                                },
+                                {
+                                        path: 'users/change-password',
+                                        method: RequestMethod.POST,
+                                },
+
+                                {
+                                        path: 'users/device-sessions',
+                                        method: RequestMethod.GET,
                                 },
 
                                 /**
@@ -400,6 +429,11 @@ export class AppModule {
                                 {
                                         path: 'cameras/get-cameras',
                                         method: RequestMethod.GET,
+                                },
+
+                                {
+                                        path: 'cameras/:cameraId/status',
+                                        method: RequestMethod.PATCH,
                                 },
 
                                 /**

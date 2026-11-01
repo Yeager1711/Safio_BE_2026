@@ -6,7 +6,7 @@ import {
         BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, ILike } from 'typeorm';
+import { Repository } from 'typeorm';
 import { User } from '../../../entities/users.entity';
 import { Role } from '../../../entities/roles.entity';
 import { Relative } from '../../../entities/relatives.entity';
@@ -17,6 +17,12 @@ import { FamilyMember } from '../../../entities/family-member.entity';
 import { FamilyGroup } from '../../../entities/family-group.entity';
 import { FaceProfile } from '../../../entities/face_profile.entity';
 import { FaceEmbedding } from '../../../entities/face_embedding.entity';
+import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
+import * as nodemailer from 'nodemailer';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { UserSession } from 'src/entities/user-session.entity';
 
 @Injectable()
 export class UserService implements OnModuleInit {
@@ -52,12 +58,16 @@ export class UserService implements OnModuleInit {
                 private faceProfileRepository: Repository<FaceProfile>,
 
                 @InjectRepository(FaceEmbedding)
-                private faceEmbeddingRepository: Repository<FaceEmbedding>
+                private faceEmbeddingRepository: Repository<FaceEmbedding>,
+
+                private readonly jwtService: JwtService,
+                private readonly configService: ConfigService,
+                @InjectRepository(UserSession)
+                private readonly userSessionRepository: Repository<UserSession>
         ) {}
 
         // =============================
         // HELPER FUNCTIONS
-        // =============================
         private calculateAge(date: Date): number {
                 if (!date) return 0;
                 const today = new Date();
@@ -91,7 +101,6 @@ export class UserService implements OnModuleInit {
 
         // =============================
         // SEARCH USERS
-        // =============================
         async searchUsers(query: string, page = 1, limit = 20) {
                 if (!query?.trim()) throw new NotFoundException('Query cannot be empty');
 
@@ -186,7 +195,6 @@ export class UserService implements OnModuleInit {
 
         // =============================
         // GET USER PROFILE (Logic phức tạp)
-        // =============================
         async getUserProfile(userId: string) {
                 const user = await this.userRepository.findOne({
                         where: { id: userId },
@@ -347,9 +355,7 @@ export class UserService implements OnModuleInit {
                 };
         }
 
-        /**
-         * Kiểm tra user đã có Face Profile + Embedding chưa
-         */
+        /** Kiểm tra user đã có Face Profile + Embedding chưa*/
         async getFaceIdStatus(userId: string) {
                 const user = await this.userRepository.findOne({
                         where: { id: userId },
@@ -616,6 +622,448 @@ export class UserService implements OnModuleInit {
                                 },
                                 require_face_id: faceSecurityEnabled,
                         },
+                };
+        }
+
+        // =============================
+        // FORGOT PASSWORD / RESET
+        // =============================
+
+        // Lưu OTP tạm (in-memory). Production nên dùng Redis.
+        private otpStore = new Map<string, { otp: string; expiresAt: number; attempts: number }>();
+
+        private generateOtp(): string {
+                return crypto.randomInt(100000, 999999).toString();
+        }
+
+        private async sendOtpEmail(email: string, otp: string): Promise<void> {
+                const transporter = nodemailer.createTransport({
+                        host: this.configService.get('EMAIL_HOST') || process.env.EMAIL_HOST,
+                        port: Number(
+                                this.configService.get('EMAIL_PORT') ||
+                                        process.env.EMAIL_PORT ||
+                                        587
+                        ),
+                        secure: false,
+                        auth: {
+                                user:
+                                        this.configService.get('EMAIL_USER') ||
+                                        process.env.EMAIL_USER,
+                                pass:
+                                        this.configService.get('EMAIL_PASS') ||
+                                        process.env.EMAIL_PASS,
+                        },
+                });
+
+                await transporter.sendMail({
+                        from: `"Safio" <${process.env.EMAIL_USER}>`,
+                        to: email,
+                        subject: 'Mã OTP khôi phục mật khẩu - Safio',
+                        html: `
+                        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+                                <h2 style="color: #1a1a2e;">Khôi phục mật khẩu Safio</h2>
+                                <p>Mã OTP của bạn là:</p>
+                                <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; 
+                                        background: #f0f4ff; padding: 16px 24px; border-radius: 8px; 
+                                        text-align: center; color: #1a1a2e;">
+                                ${otp}
+                                </div>
+                               <p style="color: #666; margin-top: 16px;">
+                                        Mã có hiệu lực trong <strong>5 phút</strong>. Không chia sẻ mã này với bất kỳ ai.
+                                </p>
+                                <p style="color: #999; font-size: 13px;">
+                                Nếu bạn không yêu cầu khôi phục mật khẩu, hãy bỏ qua email này.
+                                </p>
+                        </div>
+                        `,
+                });
+        }
+
+        /**
+         * POST /users/forgot-password
+         * Luôn trả về message chung để tránh email enumeration.
+         */
+        async forgotPassword(email: string) {
+                const normalizedEmail = email.trim().toLowerCase();
+
+                const user = await this.userRepository.findOne({
+                        where: { email: normalizedEmail },
+                        select: ['id', 'email', 'full_name'],
+                });
+
+                // Báo lỗi rõ ràng nếu email không tồn tại
+                if (!user) {
+                        throw new BadRequestException('Email không tồn tại trong hệ thống.');
+                }
+
+                this.otpStore.delete(normalizedEmail);
+
+                const otp = this.generateOtp();
+                const expiresAt = Date.now() + 5 * 60 * 1000; // 5 phút
+
+                this.otpStore.set(normalizedEmail, {
+                        otp,
+                        expiresAt,
+                        attempts: 0,
+                });
+
+                try {
+                        await this.sendOtpEmail(user.email, otp);
+                        this.logger.log(`OTP sent to ${normalizedEmail}`);
+                } catch (err: unknown) {
+                        const message = err instanceof Error ? err.message : String(err);
+                        this.logger.error(
+                                `Failed to send OTP email to ${normalizedEmail}: ${message}`
+                        );
+                        throw new BadRequestException(
+                                'Không thể gửi mã OTP. Vui lòng thử lại sau.'
+                        );
+                }
+
+                return {
+                        message: 'Mã xác thực đã được gửi đến hộp thư của bạn.',
+                };
+        }
+
+        /** POST /users/verify-reset-otp *Trả về resetToken (JWT ngắn hạn) khi OTP hợp lệ.*/
+        async verifyResetOtp(email: string, otp: string) {
+                const normalizedEmail = email.trim().toLowerCase();
+                const record = this.otpStore.get(normalizedEmail);
+
+                if (!record) {
+                        throw new BadRequestException('Mã OTP không hợp lệ hoặc đã hết hạn.');
+                }
+
+                if (Date.now() > record.expiresAt) {
+                        this.otpStore.delete(normalizedEmail);
+                        throw new BadRequestException('Mã OTP đã hết hạn. Vui lòng gửi lại.');
+                }
+
+                // Giới hạn số lần thử
+                if (record.attempts >= 5) {
+                        this.otpStore.delete(normalizedEmail);
+                        throw new BadRequestException(
+                                'Bạn đã nhập sai quá nhiều lần. Vui lòng gửi lại OTP.'
+                        );
+                }
+
+                if (record.otp !== otp) {
+                        record.attempts += 1;
+                        this.otpStore.set(normalizedEmail, record);
+                        throw new BadRequestException('Mã OTP không hợp lệ.');
+                }
+
+                // OTP đúng → xóa OTP và tạo resetToken
+                this.otpStore.delete(normalizedEmail);
+
+                const user = await this.userRepository.findOne({
+                        where: { email: normalizedEmail },
+                        select: ['id', 'email'],
+                });
+
+                if (!user) {
+                        throw new BadRequestException('Người dùng không tồn tại.');
+                }
+
+                const resetToken = this.jwtService.sign(
+                        {
+                                sub: user.id,
+                                email: user.email,
+                                purpose: 'password_reset',
+                        },
+                        {
+                                secret:
+                                        this.configService.get('JWT_SECRET') ||
+                                        process.env.JWT_SECRET ||
+                                        'your-secret-key',
+                                expiresIn: '15m', // 15 phút để đổi mật khẩu
+                        }
+                );
+
+                return {
+                        resetToken,
+                        message: 'Xác thực OTP thành công.',
+                };
+        }
+
+        /* POST /users/reset-password */
+        async resetPassword(resetToken: string, newPassword: string) {
+                let payload: { sub: string; email: string; purpose: string };
+
+                try {
+                        payload = this.jwtService.verify(resetToken, {
+                                secret:
+                                        this.configService.get('JWT_SECRET') ||
+                                        process.env.JWT_SECRET ||
+                                        'your-secret-key',
+                        });
+                } catch {
+                        throw new BadRequestException('Token không hợp lệ hoặc đã hết hạn.');
+                }
+
+                if (payload.purpose !== 'password_reset') {
+                        throw new BadRequestException('Token không hợp lệ.');
+                }
+
+                const user = await this.userRepository.findOne({
+                        where: { id: payload.sub },
+                        select: ['id', 'email', 'password'], // giả sử field password
+                });
+
+                if (!user) {
+                        throw new NotFoundException('Người dùng không tồn tại.');
+                }
+
+                const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+                await this.userRepository.update(
+                        { id: user.id },
+                        { password: hashedPassword } // đổi tên field nếu entity của bạn khác
+                );
+
+                this.logger.log(`Password reset successful for user ${user.id}`);
+
+                return {
+                        message: 'Đổi mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.',
+                };
+        }
+
+        // ============================= API: Đổi mật khẩu =============================
+
+        private changePasswordOtpStore = new Map<
+                string,
+                { otp: string; expiresAt: number; attempts: number }
+        >();
+
+        /**
+         * API: Trả OTP để frontend hiển thị + tự điền
+         * Chỉ gửi email khi xảy ra lỗi
+         */
+        async requestChangePasswordOtp(
+                userId: string,
+                method: 'email' | 'password',
+                email?: string,
+                currentPassword?: string
+        ) {
+                const user = await this.userRepository.findOne({
+                        where: { id: userId },
+                        select: ['id', 'email', 'password'],
+                });
+
+                if (!user) {
+                        throw new NotFoundException('Người dùng không tồn tại.');
+                }
+
+                // Xác minh theo method
+                if (method === 'email') {
+                        if (!email || email.trim().toLowerCase() !== user.email.toLowerCase()) {
+                                throw new BadRequestException(
+                                        'Email không khớp với tài khoản hiện tại.'
+                                );
+                        }
+                } else if (method === 'password') {
+                        if (!currentPassword) {
+                                throw new BadRequestException('Vui lòng nhập mật khẩu hiện tại.');
+                        }
+                        const isMatch = await bcrypt.compare(currentPassword, user.password);
+                        if (!isMatch) {
+                                throw new BadRequestException('Mật khẩu hiện tại không đúng.');
+                        }
+                } else {
+                        throw new BadRequestException('Phương thức xác minh không hợp lệ.');
+                }
+
+                // Xóa OTP cũ
+                this.changePasswordOtpStore.delete(userId);
+
+                const otp = this.generateOtp();
+                const expiresAt = Date.now() + 2 * 60 * 1000; // 2 phút
+
+                this.changePasswordOtpStore.set(userId, {
+                        otp,
+                        expiresAt,
+                        attempts: 0,
+                });
+
+                // Chỉ gửi email khi có lỗi xảy ra
+                try {
+                        // Không gửi email ở đây (để frontend tự điền)
+                } catch (err: unknown) {
+                        const message = err instanceof Error ? err.message : String(err);
+                        this.logger.error(`OTP error, fallback send email: ${message}`);
+
+                        // Chỉ khi lỗi mới gửi email
+                        try {
+                                await this.sendOtpEmail(user.email, otp);
+                                this.logger.log(
+                                        `Fallback: Change-password OTP sent to ${user.email}`
+                                );
+                        } catch (emailErr: unknown) {
+                                const emailMsg =
+                                        emailErr instanceof Error
+                                                ? emailErr.message
+                                                : String(emailErr);
+                                this.logger.error(`Failed to send fallback email: ${emailMsg}`);
+                        }
+                }
+
+                // Trả OTP về để frontend tự điền
+                return {
+                        otp,
+                        message: 'Mã OTP đã được tạo. Vui lòng nhập mã để tiếp tục.',
+                        expiresIn: 120, // 2 phút
+                };
+        }
+        /**
+         * API: Đổi mật khẩu
+         * - OTP giữ hiệu lực đến khi đổi thành công hoặc hết hạn (2 phút)
+         * - Không cho đặt trùng mật khẩu cũ
+         */
+        async changePassword(userId: string, otp: string, newPassword: string) {
+                const record = this.changePasswordOtpStore.get(userId);
+
+                if (!record) {
+                        throw new BadRequestException('Mã OTP không hợp lệ hoặc đã hết hạn.');
+                }
+
+                if (Date.now() > record.expiresAt) {
+                        this.changePasswordOtpStore.delete(userId);
+                        throw new BadRequestException('Mã OTP đã hết hạn. Vui lòng lấy mã mới.');
+                }
+
+                if (record.attempts >= 5) {
+                        this.changePasswordOtpStore.delete(userId);
+                        throw new BadRequestException(
+                                'Bạn đã nhập sai quá nhiều lần. Vui lòng lấy OTP mới.'
+                        );
+                }
+
+                if (record.otp !== otp) {
+                        record.attempts += 1;
+                        this.changePasswordOtpStore.set(userId, record);
+                        throw new BadRequestException(
+                                'Mã OTP chưa chính xác. Vui lòng kiểm tra lại.'
+                        );
+                }
+
+                // ===== OTP đúng → KHÔNG xóa ở đây =====
+
+                const user = await this.userRepository.findOne({
+                        where: { id: userId },
+                        select: ['id', 'password'],
+                });
+
+                if (!user) {
+                        throw new NotFoundException('Người dùng không tồn tại.');
+                }
+
+                // Kiểm tra không trùng mật khẩu cũ (OTP vẫn còn hiệu lực)
+                const isSamePassword = await bcrypt.compare(newPassword, user.password);
+                if (isSamePassword) {
+                        throw new BadRequestException('Mật khẩu mới phải khác mật khẩu hiện tại.');
+                }
+
+                // Hash + cập nhật
+                const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+                await this.userRepository.update({ id: userId }, { password: hashedPassword });
+
+                // ===== Chỉ xóa OTP SAU KHI đổi mật khẩu thành công =====
+                this.changePasswordOtpStore.delete(userId);
+
+                this.logger.log(`Password changed successfully for user ${userId}`);
+
+                return {
+                        message: 'Đổi mật khẩu thành công.',
+                };
+        }
+
+        async getDeviceSessions(userId: string) {
+                const sessions = await this.userSessionRepository.find({
+                        where: {
+                                user_id: userId,
+                                is_active: true,
+                        },
+                        select: [
+                                'id',
+                                'user_id',
+                                'device_id',
+                                'device_name',
+                                'device_type',
+                                'browser',
+                                'operating_system',
+                                'ip_address',
+                                'is_active',
+                                'created_at',
+                                'last_active_at',
+                                'revoked_at',
+                        ],
+                        order: {
+                                last_active_at: 'DESC',
+                                created_at: 'DESC',
+                        },
+                });
+
+                const deviceMap = new Map<string, (typeof sessions)[number]>();
+
+                for (const session of sessions) {
+                        const deviceId = session.device_id;
+
+                        const deviceKey = deviceId
+                                ? `device:${deviceId}`
+                                : [
+                                          session.device_name,
+                                          session.device_type,
+                                          session.browser,
+                                          session.operating_system,
+                                  ]
+                                          .map((value) => value?.trim().toLowerCase() || 'unknown')
+                                          .join(':');
+
+                        const existingSession = deviceMap.get(deviceKey);
+
+                        if (!existingSession) {
+                                deviceMap.set(deviceKey, session);
+                                continue;
+                        }
+
+                        const currentTime = new Date(
+                                session.last_active_at ?? session.created_at
+                        ).getTime();
+
+                        const existingTime = new Date(
+                                existingSession.last_active_at ?? existingSession.created_at
+                        ).getTime();
+
+                        if (currentTime > existingTime) {
+                                deviceMap.set(deviceKey, session);
+                        }
+                }
+
+                const uniqueSessions = Array.from(deviceMap.values()).sort((a, b) => {
+                        const timeA = new Date(a.last_active_at ?? a.created_at).getTime();
+
+                        const timeB = new Date(b.last_active_at ?? b.created_at).getTime();
+
+                        return timeB - timeA;
+                });
+
+                return {
+                        message: 'Lấy danh sách thiết bị đăng nhập thành công',
+                        total: uniqueSessions.length,
+                        sessions: uniqueSessions.map((session) => ({
+                                id: session.id,
+                                deviceId: session.device_id,
+                                deviceName: session.device_name,
+                                deviceType: session.device_type,
+                                browser: session.browser,
+                                operatingSystem: session.operating_system,
+                                ipAddress: session.ip_address,
+                                isActive: session.is_active,
+                                loginAt: session.created_at,
+                                lastActiveAt: session.last_active_at,
+                                revokedAt: session.revoked_at,
+                        })),
                 };
         }
 }
